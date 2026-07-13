@@ -1,5 +1,11 @@
 # TSE_Eval
 
+[![Python](https://img.shields.io/badge/python-3.10.20-blue.svg)](https://www.python.org/)
+[![PyTorch](https://img.shields.io/badge/PyTorch-2.5.1%2Bcu121-ee4c2c.svg)](https://pytorch.org/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Tests](https://img.shields.io/badge/tests-33%20passed-brightgreen.svg)](tests/)
+![Platform](https://img.shields.io/badge/platform-CPU%20%7C%20GPU-lightgrey.svg)
+
 > **A unified, easy-to-use evaluation toolkit for Target Speech Extraction (TSE).**
 
 CSV 하나를 넣으면 → 표준 음성 품질 지표를 계산해 → 결과 CSV로 돌려줍니다.
@@ -66,6 +72,50 @@ utt1,/path/est1.wav,/path/gt1.wav,/path/mix1.wav,100%
 
 > 📖 자세한 사용법(컬럼 자동 인식 규칙, CLI 옵션 전체, 실데이터 팁, FAQ)은
 > **[USE_GUIDE.md](USE_GUIDE.md)** 를 참고하세요.
+
+---
+
+## 📈 예시 출력 결과
+
+```bash
+python -m tse_eval -i preds.csv -o results.csv
+```
+
+**① per-row 결과 (`results.csv`)** — 입력 컬럼을 그대로 두고 뒤에 지표를 붙입니다:
+
+| file_id | overlap | si_sdr | si_sdri | stoi | estoi | pesq | dnsmos_sig | dnsmos_bak | dnsmos_ovrl |
+|---|---|--:|--:|--:|--:|--:|--:|--:|--:|
+| utt0001 | 0%   | 13.82 | 12.90 | 0.94 | 0.88 | 3.11 | 3.52 | 4.02 | 3.28 |
+| utt0002 | 40%  | 10.47 | 9.71  | 0.90 | 0.81 | 2.68 | 3.44 | 3.95 | 3.19 |
+| utt0003 | 100% | 6.13  | 5.42  | 0.83 | 0.71 | 2.05 | 3.30 | 3.79 | 2.98 |
+
+<sub>경로 컬럼(`estimate`/`reference`/`mixture`)·`dnsmos_p808`·`error` 는 지면상 생략</sub>
+
+**② 요약 (`results_summary.csv`)** — 오버랩 구간별 + 전체(`ALL`) 평균:
+
+| overlap | n | si_sdr | si_sdri | stoi | estoi | pesq | dnsmos_ovrl |
+|---|--:|--:|--:|--:|--:|--:|--:|
+| 0%   | 120 | 13.79 | 12.88 | 0.94 | 0.88 | 3.10 | 3.27 |
+| 40%  | 118 | 10.55 | 9.79  | 0.90 | 0.82 | 2.70 | 3.20 |
+| 100% | 121 | 6.20  | 5.49  | 0.83 | 0.72 | 2.06 | 2.99 |
+| **ALL** | **359** | **10.20** | **9.40** | **0.89** | **0.81** | **2.62** | **3.15** |
+
+**③ 콘솔 출력** — 실행하면 같은 요약이 터미널에도 찍힙니다:
+
+```text
+[tse-eval] wrote per-row metrics → results.csv  (359 rows)
+[tse-eval] wrote summary      → results_summary.csv
+
+===== Summary =====
+overlap   n  si_sdr si_sdri   stoi  estoi   pesq dnsmos_sig dnsmos_bak dnsmos_ovrl dnsmos_p808
+     0% 120 13.7900 12.8800 0.9400 0.8800 3.1000     3.5200     4.0200      3.2700      3.4100
+    40% 118 10.5500  9.7900 0.9000 0.8200 2.7000     3.4400     3.9500      3.2000      3.3600
+   100% 121  6.2000  5.4900 0.8300 0.7200 2.0600     3.3000     3.7900      2.9900      3.2500
+    ALL 359 10.2000  9.4000 0.8900 0.8100 2.6200     3.1500     3.9200      3.1500      3.3400
+```
+
+> ⚠️ 위 수치는 **출력 형식을 보여주기 위한 예시(illustrative)** 입니다. 실제 값은 모델·데이터에 따라 달라집니다.
+> (오버랩이 커질수록 분리가 어려워 지표가 낮아지는 경향을 예시로 표현했습니다.)
 
 ---
 
