@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tse-eval"
+version = "0.1.0"
+description = "A unified, easy-to-use evaluation toolkit for Target Speech Extraction (TSE)."
+readme = "README.md"
+requires-python = ">=3.10,<3.11"
+license = { text = "MIT" }
+authors = [{ name = "Ro Hoon OH" }]
+keywords = ["target-speech-extraction", "tse", "speech-enhancement", "evaluation", "si-sdr", "pesq", "stoi", "dnsmos"]
+
+# NOTE: torch / torchaudio are intentionally NOT declared here because they
+# require the CUDA-specific index URL. Install everything via requirements.txt:
+#     pip install -r requirements.txt
+dependencies = [
+    "numpy<2",
+    "pandas",
+    "tqdm",
+    "soundfile",
+    "pesq",
+    "pystoi",
+    "speechmos",
+    "onnxruntime",
+]
+
+[project.scripts]
+tse-eval = "tse_eval.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/renslightsaber/TSE_Eval"
+
+[tool.setuptools]
+packages = ["tse_eval"]

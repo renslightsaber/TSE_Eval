@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual envs
+.venv/
+venv/
+env/
+
+# Outputs / scratch
+*.out.csv
+*_results.csv
+outputs/
+scratch/
+
+# Audio artifacts from examples/tests
+examples/wavs/
+tests/_tmp/
+*.tmp.wav
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+*.swp
