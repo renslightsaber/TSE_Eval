@@ -1,0 +1,3 @@
+file_id,estimate,reference,mixture,overlap
+utt0,examples/wavs/utt0_est.wav,examples/wavs/utt0_ref.wav,examples/wavs/utt0_mix.wav,40%
+utt1,examples/wavs/utt1_est.wav,examples/wavs/utt1_ref.wav,examples/wavs/utt1_mix.wav,100%
