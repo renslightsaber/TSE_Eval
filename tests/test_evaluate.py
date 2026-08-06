@@ -80,7 +80,7 @@ def test_evaluate_csv_end_to_end_with_overlap(tmp_path, wav_triple, write_input_
         })
     csv_path = write_input_csv(rows)
 
-    per_row, summary, cols = evaluate_csv(csv_path, target_sr=16_000, progress=False)
+    per_row, summary, cols, info = evaluate_csv(csv_path, target_sr=16_000, progress=False)
 
     expected_cols = ["file_id", "estimate", "reference", "mixture", "overlap"] + METRIC_COLUMNS + ["error"]
     assert list(per_row.columns) == expected_cols
@@ -88,11 +88,13 @@ def test_evaluate_csv_end_to_end_with_overlap(tmp_path, wav_triple, write_input_
     assert (per_row["error"] == "").all()
     assert per_row["si_sdr"].apply(math.isfinite).all()
 
-    # Two distinct overlap groups (40%, 100%) plus the ALL row.
+    # Two distinct overlap groups (40%, 100%) plus the ALL row, long-format.
     assert cols.ovr == "overlap"
-    assert set(summary["overlap"]) == {"40%", "100%", "ALL"}
+    assert info["group_by"] == ["overlap"]
+    assert set(summary["axis"]) == {"overlap"}
+    assert set(summary["group"]) == {"40%", "100%", "ALL"}
     assert len(summary) == 3
-    n_by_group = dict(zip(summary["overlap"], summary["n"]))
+    n_by_group = dict(zip(summary["group"], summary["n"]))
     assert n_by_group["40%"] == 2
     assert n_by_group["100%"] == 1
     assert n_by_group["ALL"] == 3
@@ -105,11 +107,12 @@ def test_evaluate_csv_without_overlap_column_single_all_row(tmp_path, wav_triple
         rows.append({"file_id": f"utt{i}", "estimate": est_p, "reference": ref_p, "mixture": mix_p})
     csv_path = write_input_csv(rows)
 
-    per_row, summary, cols = evaluate_csv(csv_path, progress=False)
+    per_row, summary, cols, _info = evaluate_csv(csv_path, progress=False)
 
     assert cols.ovr is None
     assert len(per_row) == 2
     assert len(summary) == 1
+    assert summary.iloc[0]["axis"] == "ALL"
     assert summary.iloc[0]["group"] == "ALL"
     assert int(summary.iloc[0]["n"]) == 2
 
@@ -124,7 +127,7 @@ def test_evaluate_csv_missing_wav_sets_error_without_raising(tmp_path, wav_tripl
     csv_path = write_input_csv(rows)
 
     # Must not raise even though one row's wav is missing.
-    per_row, summary, cols = evaluate_csv(csv_path, progress=False)
+    per_row, summary, cols, _info = evaluate_csv(csv_path, progress=False)
 
     assert len(per_row) == 2
     bad_row = per_row[per_row["file_id"] == "bad"].iloc[0]
@@ -141,7 +144,7 @@ def test_evaluate_csv_metrics_subset_propagates(tmp_path, wav_triple, write_inpu
     rows = [{"file_id": "u0", "estimate": est_p, "reference": ref_p, "mixture": mix_p}]
     csv_path = write_input_csv(rows)
 
-    per_row, _summary, _cols = evaluate_csv(csv_path, metrics={"si_sdr"}, progress=False)
+    per_row, _summary, _cols, _info = evaluate_csv(csv_path, metrics={"si_sdr"}, progress=False)
 
     assert math.isfinite(per_row.loc[0, "si_sdr"])
     for key in METRIC_COLUMNS:
@@ -178,15 +181,15 @@ def test_summarize_ignores_nan_and_counts_correctly():
     summary = summarize(df, "overlap")
 
     assert len(summary) == 3  # groups "a", "b" + "ALL"
-    row_a = summary[summary["overlap"] == "a"].iloc[0]
+    row_a = summary[summary["group"] == "a"].iloc[0]
     assert int(row_a["n"]) == 2
     assert row_a["si_sdr"] == pytest.approx(10.0)  # nanmean([10, nan]) == 10
 
-    row_b = summary[summary["overlap"] == "b"].iloc[0]
+    row_b = summary[summary["group"] == "b"].iloc[0]
     assert int(row_b["n"]) == 1
     assert row_b["si_sdri"] != row_b["si_sdri"]  # nanmean([nan]) -> nan
 
-    row_all = summary[summary["overlap"] == "ALL"].iloc[0]
+    row_all = summary[summary["group"] == "ALL"].iloc[0]
     assert int(row_all["n"]) == 3
     assert row_all["si_sdr"] == pytest.approx(7.5)  # nanmean([10, 5])
 
@@ -214,7 +217,11 @@ def test_cli_writes_output_and_summary_csv(tmp_path, wav_triple, write_input_csv
     csv_path = write_input_csv(rows)
     out_csv = tmp_path / "out.csv"
 
-    rc = cli_main(["--input", csv_path, "--output", str(out_csv), "--no-progress"])
+    # --metrics is pinned on purpose: this test exercises CLI plumbing, not the
+    # metric set. Without it the shipped config applies, which includes spk_sim
+    # and would load ECAPA — breaking the suite's CPU-only/offline guarantee.
+    rc = cli_main(["--input", csv_path, "--output", str(out_csv),
+                   "--metrics", "si_sdr", "--no-progress"])
 
     assert rc == 0
     assert out_csv.exists()
@@ -224,7 +231,8 @@ def test_cli_writes_output_and_summary_csv(tmp_path, wav_triple, write_input_csv
     per_row = pd.read_csv(out_csv)
     assert len(per_row) == 2
     summary = pd.read_csv(summary_csv)
-    assert "ALL" in summary["overlap"].astype(str).tolist()
+    assert "ALL" in summary["group"].astype(str).tolist()
+    assert set(summary["axis"]) == {"overlap"}
 
 
 def test_cli_summary_output_none_skips_summary_file(tmp_path, wav_triple, write_input_csv):
@@ -235,7 +243,7 @@ def test_cli_summary_output_none_skips_summary_file(tmp_path, wav_triple, write_
 
     rc = cli_main([
         "--input", csv_path, "--output", str(out_csv),
-        "--summary-output", "none", "--no-progress",
+        "--summary-output", "none", "--metrics", "si_sdr", "--no-progress",
     ])
 
     assert rc == 0

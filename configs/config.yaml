@@ -1,0 +1,86 @@
+# ════════════════════════════════════════════════════════════════════════
+# TSE_Eval — scoring policy
+# ════════════════════════════════════════════════════════════════════════
+# This file holds only what must be IDENTICAL across the three projects
+# (TPEX / LLM-TSE / StyleTSE) for the baseline comparison to be fair.
+#
+# Run-specific values are CLI flags, not config:
+#     --input  --output  --model-name  --source-csv  --group-by
+#
+# Precedence:  CLI  >  this file  >  built-in defaults (tse_eval/config.py)
+#
+# The resolved result is written to `<output>_config.json` next to the
+# results. That sidecar — not this file — is what a paper should cite, since
+# it also records library versions and the actual input manifest.
+# ════════════════════════════════════════════════════════════════════════
+
+# Working sample rate. PORTE-v3 is natively 24 kHz; SI-SDR / SI-SDRi /
+# STOI / ESTOI are computed here. Metrics that are 16 kHz-only (PESQ,
+# DNSMOS, WER, Speaker Similarity) resample internally — see the table in
+# tse_eval/metrics.py. Do not lower this to 16000 for 24 kHz data: it would
+# put SI-SDR and ESTOI out of step with the sibling projects' eval.py.
+target_sr: 24000
+
+# SI-SDR implementation: native | asteroid
+#   native   - in-repo, no extra dependency (default)
+#   asteroid - asteroid.metrics.get_metrics (pb_bss_eval underneath)
+# The two agree to ~1e-13; tests/test_backends.py pins that. `native` is the
+# default because `asteroid` pulls in 22 more packages (pytorch-lightning,
+# torchmetrics, mir_eval, ...) and is declared only as a test extra.
+si_sdr_backend: native
+
+# Metric set for a default run.
+#
+# Measured cost per 15,000 utterances (5,000 rows x 3 systems), real PORTE-v3
+# audio averaging 11 s, DNSMOS on CUDA:
+#     SI-SDR family   2 min      STOI + ESTOI   28 min
+#     PESQ           51 min      DNSMOS         44 min
+#     spk_sim        20 min      WER           178 min   <- the expensive one
+metrics:
+  - si_sdr
+  - si_sdri
+  - input_si_sdr             # si_sdri = si_sdr - input_si_sdr, checkable in the CSV
+  - input_si_sdr_pairwise    # estimate-independent baseline; equal across projects
+  - stoi
+  - estoi
+  - pesq
+  - dnsmos_sig
+  - dnsmos_bak
+  - dnsmos_ovrl
+  - dnsmos_p808
+  - spk_sim                  # ECAPA, ~20 min / 15,000 utt — cheap enough to keep on
+  # - wer                    # Whisper large-v3, ~178 min / 15,000 utt.
+                             # Left off so iteration stays fast. Turn it on for the
+                             # paper run with:  --metrics all,wer   (or list it here)
+
+# DNSMOS onnxruntime settings. speechmos creates its ONNX sessions with no
+# options and no providers at all, which costs a lot on this machine.
+# Measured end-to-end on real PORTE-v3 audio (marginal cost, 60 rows - 20 rows):
+#     as-is (threads=0, CPU)   1475 ms/utt  ->  369 min / 15,000 utt   1.0x
+#     intra_op=4 (CPU)          550 ms/utt  ->  137 min                2.7x
+#     intra_op=4 + CUDA         175 ms/utt  ->   44 min                8.4x  <- default
+#   CUDA also pays ~40 s of one-time setup (~0.5 % of a 5,000-row run).
+# ★ OMP_NUM_THREADS does nothing here — onnxruntime's intra-op pool is its own.
+# ★ CUDA shifts DNSMOS values by up to ~3e-3 versus CPU (CPU-vs-CPU differs by 4e-7).
+#   That is far below the two decimals DNSMOS is normally reported to, but EVERY
+#   system in a comparison must use the same providers. The run's sidecar records
+#   both what was requested and what onnxruntime actually used, so a mismatch is
+#   detectable afterwards. Use `--dnsmos-providers cpu` to force CPU.
+dnsmos:
+  intra_op_threads: 4
+  providers: [CUDAExecutionProvider, CPUExecutionProvider]
+
+# WER: Whisper transcription of the estimate vs the manifest's target_sentence.
+# This is the same model LLM-TSE's eval.py uses, so the numbers are comparable.
+# Summary aggregation is corpus micro-WER (total edits / total words), not the
+# mean of per-row WER — that is the figure reported in TSE/ASR papers.
+wer:
+  model_id: openai/whisper-large-v3
+  language: en
+
+# Speaker Similarity: cosine of ECAPA embeddings, estimate vs reference.
+# ECAPA is 16 kHz-only and does NOT resample its input — a 24 kHz waveform
+# yields wrong embeddings with no error at all (requirements_h200.txt [B-9]).
+# The sample-rate policy handles that; do not bypass it.
+spk_sim:
+  model_id: speechbrain/spkrec-ecapa-voxceleb
