@@ -53,3 +53,18 @@ def align_pair(a: np.ndarray, b: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
     """
     n = min(len(a), len(b))
     return a[:n], b[:n]
+
+
+def align_triple(est: np.ndarray, ref: np.ndarray, mix: np.ndarray
+                 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Trim estimate / reference / mixture to one common length.
+
+    ``n = min(len(est), len(ref), len(mix))``, then all three are sliced — the
+    convention the sibling TSE projects already use (``llmtse/eval.py``), so
+    SI-SDR and SI-SDRi are computed over the same window as their numbers.
+
+    Trimming all three together (rather than pairwise per metric) is what makes
+    ``si_sdri == si_sdr − input_si_sdr`` hold over one consistent window.
+    """
+    n = min(len(est), len(ref), len(mix))
+    return est[:n], ref[:n], mix[:n]

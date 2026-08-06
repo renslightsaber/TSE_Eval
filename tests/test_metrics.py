@@ -210,7 +210,7 @@ def test_compute_row_metrics_subset_leaves_others_nan(speech_signal, noise_signa
 
 
 def test_compute_row_metrics_target_sr_24000_does_not_crash(speech_signal, noise_signal):
-    """Internal resample-to-16k path must work for a non-16k working sr."""
+    """Every metric must produce a finite value at the 24 kHz working sr."""
     sr24 = 24_000
     ref = speech_signal(seed=1, sr=sr24)
     interferer = noise_signal(seed=2, sr=sr24)
@@ -222,9 +222,47 @@ def test_compute_row_metrics_target_sr_24000_does_not_crash(speech_signal, noise
     assert set(result.keys()) == set(METRIC_COLUMNS)
     assert math.isfinite(result["si_sdr"])
     assert math.isfinite(result["si_sdri"])
-    # Perceptual metrics went through an internal 24k -> 16k resample.
-    assert math.isfinite(result["pesq"])
+    # STOI / ESTOI stay at the native 24 kHz (pystoi resamples to 10k itself).
     assert math.isfinite(result["stoi"])
     assert math.isfinite(result["estoi"])
+    # PESQ / DNSMOS went through an internal 24k -> 16k resample.
+    assert math.isfinite(result["pesq"])
     for key in DNSMOS_KEYS:
         assert math.isfinite(result[key])
+
+
+def test_stoi_family_computed_at_native_sr_not_16k(speech_signal, noise_signal):
+    """STOI/ESTOI must be computed at the working sr, not pre-resampled to 16 kHz.
+
+    Pins the sample-rate protocol shared with the sibling TSE projects
+    ("SI-SDR/SI-SDRi/ESTOI = native 24k, PESQ = 16k").  A regression that routes
+    STOI/ESTOI through the 16 kHz path would make the row value match a
+    ``sr=16000`` call on the same samples instead of the native-rate one.
+    """
+    sr24 = 24_000
+    ref = speech_signal(seed=1, sr=sr24)
+    interferer = noise_signal(seed=2, sr=sr24)
+    mix = ref + 0.6 * interferer
+    est = ref + 0.05 * interferer
+
+    result = compute_row_metrics(est, ref, mix, sr=sr24)
+
+    for extended, key in ((False, "stoi"), (True, "estoi")):
+        native = stoi_metric(ref, est, sr24, extended=extended)
+        # Same samples, but pystoi told the wrong rate -> resamples by a
+        # different factor -> clearly different score (~0.05 apart).
+        as_if_16k = stoi_metric(ref, est, 16_000, extended=extended)
+
+        # rel_tol, not ==: the two call paths can differ in the last ULP.
+        assert math.isclose(result[key], native, rel_tol=1e-9), (
+            f"{key} is not computed at the native sr "
+            f"({result[key]} vs native {native})")
+        assert not math.isclose(native, as_if_16k, rel_tol=1e-3), (
+            f"{key}: the native-sr and 16 kHz calls are indistinguishable, so "
+            "this test could not catch a regression")
+
+
+def test_stoi_metric_sr_defaults_to_16k_for_backward_compat(speech_signal):
+    """``sr`` defaults to 16 kHz so pre-existing two-positional-arg calls hold."""
+    x = speech_signal(seed=1)          # fixture default is 16 kHz
+    assert stoi_metric(x, x, extended=True) == stoi_metric(x, x, 16_000, extended=True)

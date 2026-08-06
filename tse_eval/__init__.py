@@ -8,28 +8,42 @@ Public API:
 """
 
 from .metrics import (
+    DEFAULT_METRICS,
     METRIC_COLUMNS,
+    METRIC_SR_POLICY,
     compute_row_metrics,
     si_sdr,
+    si_sdr_family,
     si_sdri,
+    micro_wer,
     pesq_wb,
     stoi_metric,
     dnsmos,
+    spk_sim,
+    wer,
 )
-from .evaluate import evaluate_csv, summarize, resolve_columns
+from .evaluate import (evaluate_csv, summarize, resolve_columns,
+                       add_derived_axes)
 
 __version__ = "0.1.0"
 
 __all__ = [
     "__version__",
+    "DEFAULT_METRICS",
     "METRIC_COLUMNS",
+    "METRIC_SR_POLICY",
     "compute_row_metrics",
     "si_sdr",
+    "si_sdr_family",
     "si_sdri",
+    "micro_wer",
     "pesq_wb",
     "stoi_metric",
     "dnsmos",
+    "spk_sim",
+    "wer",
     "evaluate_csv",
     "summarize",
     "resolve_columns",
+    "add_derived_axes",
 ]
