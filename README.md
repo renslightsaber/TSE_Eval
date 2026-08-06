@@ -25,27 +25,75 @@ CSV 하나를 넣으면 → 표준 음성 품질 지표를 계산해 → 결과 
 
 ## 📊 지원 지표
 
-| 지표 | 의미 | 종류 | 필요한 입력 |
-|---|---|---|---|
-| **SI-SDR** | Scale-Invariant SDR (dB) — 분리 품질 | 참조 기반 | 추출, GT |
-| **SI-SDRi** | SI-SDR 개선량 = `SI-SDR(추출,GT) − SI-SDR(혼합,GT)` | 참조 기반 | 추출, GT, **혼합** |
-| **STOI** | 명료도 (0–1) | 참조 기반 | 추출, GT |
-| **ESTOI** | Extended STOI (0–1) | 참조 기반 | 추출, GT |
-| **PESQ** | 지각 음질 (wideband, ~1–4.5) | 참조 기반 | 추출, GT |
-| **DNSMOS** | 무참조 MOS: **SIG**(음성)/**BAK**(배경)/**OVRL**(종합) + P.808 | **무참조** | 추출만 |
+| 지표 | 의미 | 종류 | 필요한 입력 | 계산 SR |
+|---|---|---|---|---|
+| **SI-SDR** | Scale-Invariant SDR (dB) — 분리 품질 | 참조 기반 | 추출, GT | native |
+| **SI-SDRi** | SI-SDR 개선량 = `SI-SDR(추출,GT) − SI-SDR(혼합,GT)` | 참조 기반 | 추출, GT, **혼합** | native |
+| **input_si_sdr** | 혼합 자체의 SI-SDR (위 식의 뺄셈 항) | 참조 기반 | 혼합, GT | native |
+| **input_si_sdr_pairwise** | 같은 값이나 **추출과 무관** (아래 설명) | 참조 기반 | 혼합, GT | native |
+| **STOI** | 명료도 (0–1) | 참조 기반 | 추출, GT | native |
+| **ESTOI** | Extended STOI (0–1) | 참조 기반 | 추출, GT | native |
+| **PESQ** | 지각 음질 (wideband, ~1–4.5) | 참조 기반 | 추출, GT | **16 kHz** |
+| **DNSMOS** | 무참조 MOS: **SIG**(음성)/**BAK**(배경)/**OVRL**(종합) + P.808 | **무참조** | 추출만 | **16 kHz** |
+| **spk_sim** | ECAPA 화자 임베딩 코사인 유사도 | 참조 기반 | 추출, GT | **16 kHz** |
+| **WER** ⚙️ | Whisper large-v3 전사 오류율 (`target_sentence` 대비) | 텍스트 참조 | 추출, 정답문장 | **16 kHz** |
 
-> - SI-SDR / SI-SDRi 는 **네이티브 구현**(별도 `asteroid` 의존성 없음), 샘플레이트에 무관합니다.
-> - PESQ / STOI / ESTOI / DNSMOS 는 내부적으로 **16 kHz** 로 리샘플해 계산합니다.
-> - DNSMOS 는 `speechmos` 의 **번들 ONNX** 로 동작 → **인터넷·모델 다운로드 불필요**.
+⚙️ = **기본 off**. WER 은 15,000 utt 기준 약 178분이 추가되어 반복 실험이 무거워지므로,
+논문 표를 만들 때만 `--metrics all,wer` 처럼 명시해 켭니다. `spk_sim`(약 20분)은 기본 포함입니다.
+
+### ⏱️ 예상 소요 시간 (5,000행 × 3시스템 = 15,000 utt)
+
+| 지표 | 시간 |
+|---|--:|
+| SI-SDR 계열 / STOI+ESTOI / PESQ | 2분 / 28분 / 51분 |
+| DNSMOS (CUDA 기본) | 44분 |
+| spk_sim | 20분 |
+| **기본 세트 합계** | **약 145분** |
+| WER 추가 시 | +178분 |
+
+> DNSMOS 는 `tse_eval/ort_setup.py` 가 onnxruntime 스레드와 providers 를 주입해
+> **기본으로 CUDA 가속**됩니다(무가속 369분 → 44분, 8.4배).
+> CPU 로 되돌리려면 `--dnsmos-providers cpu`.
+> ⚠️ CUDA 와 CPU 의 DNSMOS 값은 최대 약 `3e-3` 다릅니다 — **비교표의 세 시스템은 반드시
+> 같은 설정으로** 채점하세요. 실제 사용된 EP 는 `<output>_config.json` 에 기록됩니다.
+
+> **`input_si_sdr` 을 왜 따로 내보내나요?**
+> `SI-SDRi = SI-SDR − input_si_sdr` 항등식을 결과 CSV 에서 바로 확인할 수 있어야 하기 때문입니다.
+> 두 가지를 함께 냅니다:
+> - `input_si_sdr` — 세 신호를 공통 길이로 자른 뒤 계산(형제 프로젝트 `eval.py` 와 동일 규약).
+> - `input_si_sdr_pairwise` — 혼합/GT 만으로 계산해 **추출 결과와 무관**. 같은 샘플이면
+>   프로젝트가 달라도 값이 동일하므로, *하나의 파이프라인으로 채점했다*는 직접적인 증거가 됩니다.
+
+> **SDR / SIR / SAR 은 넣지 않았습니다.** `mir_eval.bss_eval_sources` 는 발화당 약 1초라
+> 5,000행에 약 91분이 걸리고, blind source separation 전제라 간섭 신호 없이는 SIR 이 `inf` 로
+> 나와 TSE 에 부적합합니다.
+
+> **샘플레이트 프로토콜** — `--target-sr` (기본 **24000**) 이 "native" 레이트입니다.
+> - SI-SDR / SI-SDRi 는 **네이티브 구현**(별도 `asteroid` 의존성 없음)이고 샘플레이트에 무관합니다.
+> - STOI / ESTOI 도 native 로 계산합니다 — `pystoi` 가 내부에서 10 kHz 로 리샘플하므로
+>   미리 16 kHz 로 낮추면 `24k→16k→10k` 이중 리샘플만 더해집니다.
+> - PESQ 는 ITU-T P.862 가 8/16 kHz 만 정의하고, DNSMOS 는 16 kHz 모델이라
+>   이 둘만 내부에서 **16 kHz** 로 리샘플합니다.
+> - DNSMOS 는 `speechmos` 의 **번들 ONNX** 로 동작 → **모델 다운로드 불필요**.
+>   단 `speechmos` 가 의존성을 선언하지 않으므로 **`librosa` 가 반드시 설치돼 있어야** 합니다
+>   (없으면 DNSMOS 4열이 조용히 전부 `nan`).
 
 ---
 
 ## 🚀 빠른 시작
 
-```bash
-# 1) 설치 (TPEX 와 동일한 torch 2.5.1+cu121 / Python 3.10 환경 권장)
-pip install -r requirements.txt
+**1) 설치** — 사용 중인 GPU 에 따라 갈립니다.
 
+| 환경 | 방법 |
+|---|---|
+| **NVIDIA H100 / H200** | 👉 **[INSTALL.md](INSTALL.md)** 를 따라가세요 (`requirements_h200.txt` 기준, 단계별 안내) |
+| 그 외 / CPU only | `pip install -r requirements.txt` + `pip install librosa==0.11.0` |
+
+> ⚠️ `requirements.txt` 는 A6000/CPU 시절 파일이라 **`librosa` 가 빠져 있습니다.**
+> `librosa` 없이 돌리면 `speechmos` 가 내부에서 그것을 import 하지 못해
+> **DNSMOS 4개 열이 에러 없이 전부 `nan`** 이 됩니다. 꼭 같이 설치하세요.
+
+```bash
 # 2) 합성 예제 생성 (실제 데이터 없이 바로 체험)
 python examples/make_example.py
 
@@ -69,6 +117,29 @@ utt1,/path/est1.wav,/path/gt1.wav,/path/mix1.wav,100%
 - `estimate` = 모델이 추출한 target speech, `reference` = 정답 target speech, `mixture` = 혼합 음성
 - **컬럼 이름은 자동 인식**됩니다 (`estimate/extracted/est/pred…`, `reference/target/gt…`, `mixture/mixed/mix…`).
 - `overlap` 컬럼은 **선택**입니다. 없으면 전체를 하나로 보고 요약 1줄만 만듭니다.
+
+### 세 프로젝트 매니페스트 채점 + 층화 비교
+
+TPEX / LLM-TSE / StyleTSE 의 inference 매니페스트는 **추가 옵션 없이 그대로** 인식됩니다
+(추출 경로 `pred_path`, GT `target_path`, 혼합 `mixed_path`).
+
+```bash
+python -m tse_eval \
+    --input  /home/work/my-outputs/tpex/<run>/inference_manifest.csv \
+    --output results/tpex.csv \
+    --model-name tpex \
+    --group-by overlap_ratio,prompt_category,same_gender,first_speak
+```
+
+- `--model-name` 은 요약 CSV 의 `model_name` 열에 들어가므로, 세 프로젝트 요약을
+  그대로 이어 붙이면 baseline 비교표가 됩니다.
+- `same_gender` 는 `target_gender == infer_gender` 로 **자동 파생**되는 축입니다.
+- 요약은 **long-format**(`model_name, axis, group, n, 지표…`) 이라 축을 몇 개 주든 파일 하나입니다.
+- `--source-csv <PORTE-v3 CSV>` 를 주면 `file_id` 로 left join 해서
+  StyleTSE 에 없는 `target_sentence`(WER 정답)와 연속형 축(`snr_db` 등)을 가져옵니다.
+  연속형 축은 자동으로 사분위 구간(`Q1..Q4`)으로 묶입니다.
+- 실행마다 **`<output>_config.json` sidecar** 가 함께 생성됩니다 — 지표 세트, SI-SDR 백엔드,
+  지표별 샘플레이트, 모델 id, 입력 경로, 라이브러리 버전이 기록되어 논문에서 인용할 수 있습니다.
 
 > 📖 자세한 사용법(컬럼 자동 인식 규칙, CLI 옵션 전체, 실데이터 팁, FAQ)은
 > **[USE_GUIDE.md](USE_GUIDE.md)** 를 참고하세요.
@@ -124,12 +195,12 @@ overlap   n  si_sdr si_sdri   stoi  estoi   pesq dnsmos_sig dnsmos_bak dnsmos_ov
 ```python
 from tse_eval import evaluate_csv, compute_row_metrics, si_sdr
 
-# 전체 파이프라인
-per_row, summary, cols = evaluate_csv("preds.csv", target_sr=16000)
+# 전체 파이프라인 (target_sr 기본값 24000)
+per_row, summary, cols = evaluate_csv("preds.csv", target_sr=24000)
 
 # 개별 지표
 snr = si_sdr(est_wav, ref_wav)          # numpy 1-D 배열
-row = compute_row_metrics(est, ref, mix, sr=16000)   # dict
+row = compute_row_metrics(est, ref, mix, sr=24000)   # dict
 ```
 
 ---
@@ -142,9 +213,12 @@ row = compute_row_metrics(est, ref, mix, sr=16000)   # dict
 | torch / torchaudio | 2.5.1+cu121 |
 | numpy | 1.26.4 (`<2`) |
 
-`pesq`, `pystoi`, `speechmos`, `onnxruntime`, `pandas`, `soundfile` — 전체 핀은 [`requirements.txt`](requirements.txt) 참고.
+`pesq`, `pystoi`, `speechmos`, `librosa`, `onnxruntime`, `pandas`, `soundfile` —
+전체 핀은 **H100/H200** 은 [`requirements_h200.txt`](requirements_h200.txt),
+그 외는 [`requirements.txt`](requirements.txt) 참고.
 
 > **CPU만 있어도 동작**합니다. GPU 는 필수가 아닙니다(DNSMOS ONNX 는 CPU 추론).
+> Speaker Similarity / WER 확장 지표를 쓸 때만 GPU 가 도움이 됩니다.
 
 ---
 
@@ -157,12 +231,30 @@ tse_eval/
 │   ├── audio.py         # 로드/모노/리샘플/길이 정렬
 │   ├── evaluate.py      # CSV 파이프라인 + 오버랩 요약
 │   └── cli.py           # 커맨드라인 진입점
+│   ├── backends.py      # SI-SDR 백엔드 2종 (native 기본 / asteroid)
+│   ├── ort_setup.py     # DNSMOS onnxruntime 가속 (스레드 + CUDA providers)
+│   └── config.py        # 정책 YAML 로드 + 실행 설정 sidecar 기록
+├── configs/
+│   └── config.yaml      # 채점 정책(세 프로젝트가 동일해야 하는 값)
+├── scripts/
+│   └── download_models.py   # 확장 지표용 모델(ECAPA/Whisper) 다운로드 + 검증
 ├── examples/            # 합성 예제 생성기 + sample_input.csv
 ├── tests/               # pytest (합성 신호, CPU only)
-├── requirements.txt
-├── USE_GUIDE.md
+├── requirements.txt         # A6000 / CPU 기준 (★ librosa 없음)
+├── requirements_h200.txt    # H100/H200 기준 — 함정 12가지 주석 포함
+├── INSTALL.md               # 설치 가이드 (단계별, 문제 해결)
+├── USE_GUIDE.md             # 사용법 (CLI 옵션, 컬럼 인식, FAQ)
+├── CAVEATS.md               # ⚠️ 주의사항 — 조용히 틀리는 것들, 재현성 체크리스트
 └── README.md
 ```
+
+---
+
+## ⚠️ 논문 숫자를 만들기 전에
+
+**[CAVEATS.md](CAVEATS.md)** 를 한 번 읽어주세요. 에러가 나는 문제보다
+**에러 없이 조용히 틀린 값을 내는** 문제가 위험합니다 (예: `librosa` 누락 → DNSMOS 전부 `nan`,
+ECAPA 에 24 kHz 입력 → 에러 없이 다른 임베딩). 마지막에 **재현성 체크리스트 5개**가 있습니다.
 
 ---
 

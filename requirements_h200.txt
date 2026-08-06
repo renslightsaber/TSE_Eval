@@ -1,0 +1,510 @@
+# ====================================================================
+# TSE_Eval — requirements_h200.txt   (NVIDIA H100 / H200, Hopper sm_90)
+# ====================================================================
+# 작성일: 2026-08-06 · 기준 파일: requirements.txt (A6000 / CPU-only 검증본)
+#
+# ⓘ H100 과 H200 은 소프트웨어 요구사항이 동일합니다(둘 다 Hopper sm_90; 차이는 VRAM/대역폭뿐).
+#   → 이 파일 하나로 H100·H200 을 모두 커버합니다.
+#
+# ⓘ 기존 requirements.txt 와의 차이는 5가지입니다:
+#     ① onnxruntime  →  onnxruntime-gpu     (DNSMOS ONNX 를 GPU 로. tpex 와 동일 핀)
+#     ② Speaker Similarity 의존성 정식 편입  (speechbrain ECAPA-TDNN)
+#     ③ WER 의존성 정식 편입                 (transformers + accelerate + jiwer, Whisper large-v3)
+#     ④ ★ librosa 추가 — 없으면 DNSMOS 가 전부 nan ★  ([B-11], 실측 재현)
+#     ⑤ scipy / pytest 등 누락 핀 보강        (전자는 speechbrain 이 요구, 후자는 테스트 스위트용)
+#   torch 는 **cu121 그대로 유지**합니다 — 이유는 [B-0].
+#   두 모델은 `python scripts/download_models.py` 로 한 번에 받습니다 ([C] ⑥).
+#
+# ⓘ 형제 repo 의 같은 파일들과 짝을 맞춘 것입니다:
+#     /home/work/my-code/tpex/requirements/requirements_h200.txt
+#     /home/work/my-code/llmtse/requirements_h200.txt
+#     /home/work/my-code/styletse/requirements_h200.txt
+#
+# ====================================================================
+# [A] 대상 환경 (2026-08-06, 이 세션에서 실측)
+# ====================================================================
+#   GPU            : NVIDIA H200 × 1 (Hopper, sm_90, 143,771 MiB ≈ 141 GB HBM3e)
+#   Driver         : 580.126.20  (driver 가 광고하는 CUDA: 13.0)
+#   Base image     : NGC PyTorch 24.09 (Ubuntu 22.04 jammy / nvcc 12.6.68)
+#   System Python  : 3.10.12   ★ 여기에는 절대 pip install 하지 마세요
+#   CPU            : ★ 24 core 만 허용 (호스트는 224 core — cgroup cpuset 제한). [B-2] 필독
+#   cuDNN          : 9.4.0  (/usr/lib/x86_64-linux-gnu/libcudnn.so.9)
+#   Toolchain      : gcc/g++ 11.4.0 · cmake 3.30.2 · ninja 1.11.1  → pesq 소스 빌드 OK
+#   conda          : /home/work/my-code/miniforge3
+#   영구 저장소    : /home/work/my-code (875 GB 여유) · my-datasets · my-outputs
+#   휘발 영역      : /home/work 루트 — 세션 종료 시 삭제됨 ★ 여기에 env 만들지 말 것
+#
+#   ── 검증 결과 (2026-08-06, 임시 env 를 만들어 ⓪~⑦ 전 과정 완주) ──────
+#   ✅ 처음부터 완주 성공. 단계별 실측: ① 22s · ② 126s · ③ 170s · ④ 33s
+#   ✅ 최종 상태: 110 패키지(= 런타임 + pytest + asteroid 22개) · pip check 클린
+#      · pytest 83 passed, 1 skipped · scripts/download_models.py ALL CHECKS PASSED
+#      · DNSMOS 가 CUDAExecutionProvider 로 동작하는 것까지 확인
+#   ✅ 런타임만 필요하면 ④를 `-e .` 로 (asteroid 22개 제외) — 그 경우 85 패키지
+#   ✅ 의존성 충돌 0건으로 resolve 완료 — 런타임 기준 ★ 85 패키지 ★
+#   ✅ 실제로 선택된 버전:
+#        torch 2.5.1+cu121 · torchaudio 2.5.1+cu121 · numpy 1.26.4 · scipy 1.15.3
+#        onnxruntime-gpu 1.20.2 · protobuf 6.33.6 · speechmos 0.0.1.1
+#        librosa 0.11.0 (+ numba 0.66.0 / llvmlite 0.48.0 / scikit-learn 1.7.2)
+#        speechbrain 1.0.3 · HyperPyYAML 1.2.3 · joblib 1.5.3 · huggingface_hub 0.34.4
+#        transformers 4.46.3 · tokenizers 0.20.3 · safetensors 0.8.0 · accelerate 1.10.0
+#        jiwer 3.1.0 (+ RapidFuzz) · pesq 0.0.4 · pystoi 0.4.1
+#        setuptools 80.10.2 · pytest 8.4.2
+#   ✅ 소스 빌드가 필요한 sdist 는 ★ pesq 0.0.4 하나뿐 ★ (gcc 11.4 존재 → 빌드 가능)
+#   ✅ numba 0.66.0 을 끌어와도 numpy 는 1.26.4 로 유지됨(<2 제약 안전) — resolve 로 확인
+#   ✅ 테스트 스위트 35개 전부 통과 (librosa 설치 후. 없으면 DNSMOS 관련 2개 실패 — [B-11])
+#   ⚠️ GPU 런타임(sm_90 커널 로딩, CUDA EP 실제 사용)은 설치 후 [D] 에서 확인하세요.
+#
+# ====================================================================
+# [B] ★ 함정 — 읽지 않으면 시간 낭비합니다
+# ====================================================================
+#
+# ── B-0. torch 를 cu124/cu126 으로 올리지 마세요
+#    torch 2.5.1+cu121 휠은 **sm_90 커널을 포함**하며, driver 580 은 CUDA 12.1 앱을
+#    minor-version 호환으로 그대로 실행합니다(형제 repo 3개가 이 머신에서 실측 확인).
+#    게다가 TSE_Eval 은 torch 를 **오디오 load / resample 에만** 씁니다
+#    (tse_eval/audio.py:30-45 — 결과는 항상 .cpu() 로 내려옴, GPU 연산 0건).
+#    → cu124 로 올려도 실익이 없고, tpex/llmtse/styletse 와 바이너리가 갈려 재현성만 잃습니다.
+#
+# ── B-1. ★★ 실행 시 `--est-col pred_path` 를 반드시 붙이세요 ★★
+#    세 모델의 inference 매니페스트는 추출 오디오 경로를 **`pred_path`** 컬럼에 씁니다:
+#        tpex/scripts/inference.py:525-535   (inference_manifest.csv, 26열)
+#        llmtse/inference.py:171-191         (inference_<split>.csv,  19열)
+#        styletse/inference.py:357-376       (manifest.csv,           18열)
+#    그런데 tse_eval/evaluate.py:28-29 의 est 자동인식 후보에는
+#        estimate / extracted / est / pred / prediction / enhanced / output
+#        / est_path / estimate_path
+#    만 있고 **`pred_path` 가 없습니다.**
+#    → 생략하면 `Could not auto-detect the 'est' column` 으로 즉시 실패합니다.
+#    (ref=`target_path` · mix=`mixed_path` · ovr=`overlap_ratio` · id=`file_id` 는 정상 인식됩니다.)
+#
+# ── B-2. ★★ DNSMOS 가 이 컨테이너에서 20배 이상 느려집니다 ★★
+#    /proc/cpuinfo 는 호스트 224 core 를 보여주지만 cgroup cpuset 은 24개만 허용합니다.
+#    speechmos 는 ONNX 세션을 ★ 옵션도 providers 도 없이 ★ 만듭니다:
+#        speechmos/dnsmos.py:19-20  →  ort.InferenceSession(self.primary_model_path)
+#    그래서 두 가지가 동시에 나빠집니다.
+#      (1) onnxruntime 이 **호스트 토폴로지 기준**으로 스레드 풀을 잡고 각 스레드를 물리
+#          코어에 핀하려다 실패 → 스레드마다 빨간 줄 + 심한 oversubscription:
+#            [E:onnxruntime:Default, env.cc:234 ThreadMain] pthread_setaffinity_np failed
+#      (2) providers 를 안 넘기면 onnxruntime 1.20 은 ★ CPU EP 만 ★ 씁니다 ([B-3]).
+#
+#    ★ 실측 (2026-08-06, 실제 PORTE-v3 오디오·평균 11초, TSE_Eval 파이프라인 end-to-end) ★
+#      측정법: 60행 실행 − 20행 실행 의 한계비용/40 (고정 초기화 비용 상쇄),
+#              DNSMOS 만 요청했으므로 행당 wav I/O 도 포함된 값입니다.
+#
+#        설정                                한계비용      15,000 utt   무가속 대비
+#        ─────────────────────────────────   ───────────   ──────────   ─────────
+#        무가속 (threads=0, CPU)             1475 ms/utt      369분        1.0배
+#        intra_op=4 (CPU)                     550 ms/utt      137분        2.7배
+#        intra_op=4 + CUDA  ← ★ 현재 기본     175 ms/utt       44분        8.4배
+#
+#      ※ CUDA 는 1회성 초기화 ~40초 추가 (5,000행 기준 0.5% 수준).
+#      ※ `export OMP_NUM_THREADS=4` 는 효과가 없습니다 — onnxruntime 의 intra-op 풀은
+#        OpenMP 가 아니라 자체 풀이라 SessionOptions 로만 제어됩니다(실측 확인).
+#      ※ 점수 영향: CPU 설정끼리는 4e-07(사실상 동일),
+#        CUDA 는 최대 ~3e-03 차이(부동소수점 커널 차이). DNSMOS 는 보통 소수점 2자리로
+#        보고하므로 보고 정밀도보다 훨씬 작지만, ★ 세 프로젝트가 반드시 같은 EP 로
+#        채점되어야 합니다 ★ — sidecar 에 requested/actual providers 가 기록됩니다.
+#
+#    ★ 이 가속은 TSE_Eval 에 이미 구현되어 있습니다 (tse_eval/ort_setup.py).
+#      기본값이 CUDA 이며, CPU 로 되돌리려면 `--dnsmos-providers cpu` 를 쓰세요.
+#
+# ── B-3. onnxruntime-gpu 만 깔아두면 DNSMOS 는 CPU 로 돕니다 (해결됨)
+#    "onnxruntime-gpu 를 깔았으니 GPU 로 돌겠지" 는 사실이 아닙니다. 실측 확인:
+#        ort.InferenceSession(model)                       → ['CPUExecutionProvider']
+#        ort.InferenceSession(model, providers=['CUDA...']) → ['CUDAExecutionProvider', 'CPU...']
+#    즉 CUDA 로딩이 **실패하는 게 아니고**, onnxruntime 1.20 이 providers 미지정 시
+#    CPU EP 만 쓰는 것이 정상 동작입니다(1.9+ 부터 명시 요구). speechmos 는 providers 를
+#    넘기지 않으므로 CUDA 를 시도조차 하지 않습니다.
+#    → TSE_Eval 은 `tse_eval/ort_setup.py` 가 providers 를 명시해 주므로 onnxruntime-gpu
+#      핀이 실제로 값을 합니다(8.4배). 어떤 EP 로 돌았는지는 결과 옆 sidecar JSON 의
+#      `dnsmos.actual_providers` 에서 확인하세요. 직접 확인은 [D-2] 스니펫.
+#    참고: 이 머신은 시스템 cuDNN 9.4.0 + torch 번들 nvidia-cudnn-cu12 9.1.0.70 을 갖고 있어
+#    onnxruntime-gpu 1.20.x (CUDA 12.x + cuDNN 9 요구) 조건을 충족합니다(위 실측이 그 증거).
+#
+# ── B-4. onnxruntime-gpu 는 py3.10 에서 1.20.2 가 상한입니다
+#    최신 onnxruntime-gpu(1.28.x)는 `requires_python >= 3.11` 이라 애초에 설치 불가이고,
+#    cp310 linux 휠이 존재하는 마지막 계열이 1.20.x 입니다.
+#    → tpex 와 동일하게 `onnxruntime-gpu>=1.19.2,<1.21` 로 둡니다(resolve 결과 1.20.2).
+#
+# ── B-5. 확장 지표 모델은 첫 실행 시 인터넷이 필요합니다
+#    기존 requirements.txt 기반 설치는 "완전 오프라인"이 장점이었습니다
+#    (DNSMOS 는 speechmos 에 ONNX 가 번들되어 다운로드가 없음).
+#    Speaker Similarity + WER 을 넣으면 HuggingFace 에서 2개를 1회 내려받습니다:
+#        speechbrain/spkrec-ecapa-voxceleb   ~89 MB
+#        openai/whisper-large-v3            ~3.1 GB
+#    → [C] ⑥ (`scripts/download_models.py`) 를 **미리** 실행해 캐시를 만들어 두세요.
+#    (오프라인 유지가 꼭 필요하면 기존 requirements.txt 를 그대로 쓰면 됩니다.)
+#
+# ── B-6. setuptools<81 은 이 repo 에서 "예방적" 핀입니다
+#    형제 repo 3개는 asteroid 0.7.0 → torchmetrics 0.11.4 가 모듈 최상단에서
+#    `pkg_resources` 를 import 하기 때문에 이 핀이 **필수**였습니다
+#    (setuptools 81+ 는 pkg_resources 제거, 오늘 conda py3.10 기본값은 83.x → import 즉사).
+#    TSE_Eval 은 asteroid/torchmetrics 를 쓰지 않으므로 원칙적으로는 불필요하지만,
+#    ① 형제 repo 와 동일한 setuptools 계열을 유지하고
+#    ② 전이 의존성이 pkg_resources 를 건드리는 사고를 막기 위해 남겨둡니다.
+#    (SI-SDR / SI-SDRi 는 tse_eval/metrics.py 에 네이티브 구현되어 asteroid 가 필요 없습니다.)
+#
+# ── B-7. ★★ $HOME(/home/work) 은 세션 종료 시 삭제되는 휘발 영역입니다 ★★
+#    실측: HOME=/home/work → /dev/loop6, 49 GB. (이미 ~/.cache/huggingface 가 3.9 GB)
+#    HuggingFace 기본 캐시가 여기라, whisper 3.1 GB 를 ★ 세션마다 재다운로드 ★ 하게 됩니다.
+#    → 반드시 영속 vFolder 로 옮기세요:
+#          export HF_HOME=/home/work/my-checkpoints/hf_cache
+#      (이 경로는 이미 존재하며, llmtse/docs/guides/transfer_to_nipa_guide.md:301 이
+#       지정한 워크스페이스 관례입니다. 형제 프로젝트와 캐시를 공유해 재다운로드가 없습니다.)
+#    ※ scripts/download_models.py 는 HF_HOME 미설정 시 이 경로를 자동으로 쓰고,
+#      vFolder 밖으로 설정돼 있으면 경고합니다.
+#    ※ `~/.bashrc` 에 넣어두는 것도 방법이지만 $HOME 자체가 휘발이라 사라질 수 있습니다.
+#
+# ── B-8. snapshot_download("openai/whisper-large-v3") 는 24.7 GB 를 받습니다
+#    해당 repo 에는 flax_model.msgpack(6.2 GB) · pytorch_model.fp32 샤드(10 GB) ·
+#    tf_model 등이 함께 들어 있습니다(HF tree API 실측 = 24.7 GB).
+#    필요한 것은 model.safetensors(3.09 GB) + config/tokenizer 뿐입니다.
+#    → `from_pretrained` 를 쓰면 필요한 파일만 받아 ~3.1 GB 로 끝납니다.
+#      scripts/download_models.py 가 이 방식을 씁니다. snapshot_download 를 쓰지 마세요.
+#
+# ── B-9. ★★ Speaker Similarity 의 "조용한 실패" ★★
+#    ECAPA(`speechbrain/spkrec-ecapa-voxceleb`)는 16 kHz 전용입니다.
+#    근거: hyperparams.yaml 이 sample_rate 를 지정하지 않아 Fbank 기본값
+#          16000 이 쓰이고(speechbrain/lobes/features.py:243),
+#          `encode_batch()` 는 리샘플을 하지 않습니다
+#          (`AudioNormalizer` 는 `load_audio(path)` 경로에서만 동작).
+#    → 24 kHz 텐서를 넣어도 ★ 예외가 나지 않고 그냥 다른(틀린) 임베딩 ★ 이 나옵니다.
+#    ⚠ 실제 사고 사례: styletse/src/teammate_codes/Style_TSE_share/evaluate_styletse.py
+#      는 `--sample_rate` 기본값이 24000(:213-216)이고 :152-153 에서 24 kHz 텐서를
+#      encode_batch 에 그대로 넣습니다 → 그 스크립트가 낸 Sp.sim 수치는 신뢰할 수 없습니다.
+#      (같은 파일이 calculate_pesq(..., 24000) 도 호출하는데 PESQ 는 이를 거부합니다.)
+#    → 지표 구현 시 반드시 16 kHz 로 내려서 넣으세요. [B-10] 표 참고.
+#
+# ── B-10. ★ 지표마다 계산 샘플레이트가 다릅니다 (형제 repo 와 동일 프로토콜) ★
+#    근거: llmtse/eval.py:9 "SI-SDR/SI-SDRi/ESTOI = native 24k, PESQ = 16k (TPEX 정렬)"
+#
+#      지표                  계산 SR      강제 방식
+#      ────────────────────  ──────────  ─────────────────────────────────────────
+#      SI-SDR / SI-SDRi      24k native  SR 무관 (네이티브 구현)
+#      STOI / ESTOI          24k native  pystoi 가 내부 10 kHz 로 리샘플(어떤 SR 도 OK)
+#      PESQ                  16k         pesq/_pesq.py:33 → ValueError (P.862 는 8k/16k만)
+#      DNSMOS (4열)          16k         speechmos/dnsmos.py:103 → ValueError
+#      Spk-Sim (ECAPA)       16k         ★ 에러 없이 조용히 틀림 ([B-9])
+#      WER (Whisper)         16k         feature_extraction_whisper.py:248 → ValueError
+#
+#    TSE_Eval 은 이 프로토콜을 코드로 구현합니다(tse_eval/metrics.py 의 compute_row_metrics):
+#      `--target-sr` 기본값이 ★ 24000 ★ 이고, PESQ/DNSMOS 만 내부에서 16 kHz 로 내립니다.
+#    ※ 참고로 FlowTSE(arXiv 2505.14465)의 "24 kHz" 는 Vocos 보코더 요구사항이며,
+#      데이터셋(LibriSpeech/Libri2Mix/WHAM!)은 원본이 16 kHz 이고 WER 은 Whisper-small,
+#      SIM 은 ResNet34-VoxCeleb2 (둘 다 16k 모델)입니다. 즉 그쪽 평가도 사실상 16 kHz 입니다.
+#      우리는 GT 자체가 진짜 24 kHz 라 native 계산에 실익이 있는, 더 유리한 상황입니다.
+#
+# ── B-11. ★★ librosa 가 없으면 DNSMOS 4열이 전부 조용히 nan 입니다 ★★
+#    speechmos 휠은 의존성을 **하나도 선언하지 않습니다**(Requires-Dist 없음).
+#    그런데 speechmos/dnsmos.py:4 는 `import librosa` 를 모듈 최상단에서 실행합니다.
+#    tse_eval/metrics.py 의 dnsmos() 는 모든 예외를 nan 으로 삼키는 설계이므로,
+#    librosa 미설치 시 ModuleNotFoundError 가 조용히 먹히고
+#    ★ 결과 CSV 의 dnsmos_sig/bak/ovrl/p808 이 전 행 nan ★ 이 됩니다(에러 메시지 없음).
+#    실측 재현 완료: librosa 없는 env 에서 테스트 2개 실패 → librosa 설치 후 35개 전부 통과.
+#    → 아래 핀 목록에 librosa==0.11.0 이 있습니다(tpex 와 동일 핀). ★ 삭제 금지 ★
+#    ※ 결과 CSV 를 받으면 dnsmos 열이 전부 nan 인지 항상 먼저 확인하세요.
+#
+# ── B-12. SI-SDR 은 native 구현이 기본이고 asteroid 와 등가입니다
+#    `si_sdr` 의 eps 배치를 pb_bss_eval(=asteroid 내부)과 동일하게 맞춰
+#    실측 ~1e-13 이내로 일치합니다(무음 est / DC-only / 초소음 포함).
+#    유일한 의도적 차이: 무음 reference 는 여기서 nan(평균에서 제외), asteroid 는 유한 바닥값.
+#    → 그래서 asteroid 를 런타임 의존성으로 넣지 않습니다(22개 패키지 증가).
+#      `--si-sdr-backend asteroid` 로 쓰고 싶다면:  pip install -e '.[test]'
+#    ※ 과거 구현은 eps 를 분자·분모 양쪽에 더해 degenerate 입력에서 0.0 dB 를 냈고,
+#      5,000행 중 1%만 degenerate 여도 평균이 약 0.8 dB 과대평가되었습니다. 수정 완료.
+#
+# ====================================================================
+# [C] ★ 설치 순서 (반드시 ⓪ → ⑦ 순서대로)
+# ====================================================================
+#   ★ 이 순서는 2026-08-06 에 이 머신에서 처음부터 끝까지 실제로 완주해 검증했습니다.
+#     소요 시간(pip 캐시 없는 최초 실행 기준):
+#       ⓪ ~0s · ① 22s · ② 60s · ③ 3분 28초(pesq 빌드 포함) · ④ 수초 · ⑥ 35s
+#     결과: 85 패키지 · pytest 35 passed · 24 kHz 9지표 nan 0개 · ALL CHECKS PASSED
+#
+#   ★★ pip 캐시 주의 ★★
+#     NGC 이미지의 /etc/pip.conf 가 `no-cache-dir = true` 를 걸어놔서 기본적으로
+#     캐시가 없습니다 → 재시도할 때마다 약 4 GB 를 다시 내려받습니다.
+#     아래처럼 ★ CLI 플래그 ★ 로만 되살릴 수 있습니다(PIP_CACHE_DIR 환경변수는 안 먹힘 — 실측):
+#         --cache-dir /home/work/my-code/pip_cache
+#     아래 ②③④ 명령에 이미 넣어두었습니다. 설치가 한 번이라도 실패해 다시 할 때
+#     체감 차이가 큽니다(캐시는 vFolder 라 세션이 바뀌어도 남습니다).
+#
+#   ⓪ ★ 기존 env 를 깨끗이 지우고 시작 (재설치라면 필수) ★
+#      반쯤 지워진 빈 껍데기 디렉토리가 남아 있으면 이후 단계가 이상하게 실패합니다.
+#
+#        source /home/work/my-code/miniforge3/etc/profile.d/conda.sh
+#        conda deactivate 2>/dev/null
+#        conda env remove -n tseeval -y          # 빈 껍데기여도 이 명령이 정리해 줍니다
+#        ls -d /home/work/my-code/miniforge3/envs/tseeval   # → "No such file" 이어야 정상
+#
+#      또한 repo 의 이전 editable 설치 잔여물도 지우세요:
+#        cd /home/work/my-code/TSE_Eval && rm -rf tse_eval.egg-info build
+#      ※ 안 지우면 ③에서 아래 ERROR 가 뜹니다(무해하지만 실패로 착각하게 됩니다):
+#          ERROR: ... tse-eval 0.1.0 requires onnxruntime, which is not installed.
+#        새 env 인데도 pip 이 repo 의 egg-info 를 "설치된 패키지"로 오인해서 나오는 것입니다.
+#
+#   ① conda 환경을 ★ 영구 저장소(vFolder) 안에 ★ 생성
+#      ※ /home/work 루트·홈에 깐 것은 세션 종료 시 사라집니다.
+#      ※ 판단 기준은 "-n 이냐 -p 냐"가 아니라 "경로가 /home/work/my-code 안이냐" 입니다.
+#        miniforge3 자체가 vFolder 안에 있으므로 -n 으로 만들어도 영속입니다.
+#        확인법: conda env list → 경로가 /home/work/my-code/... 로 시작하면 안전.
+#
+#        conda create -n tseeval -y python=3.10.20
+#        conda activate tseeval
+#        cd /home/work/my-code/TSE_Eval
+#
+#      ※ ★ 설치 중에는 다른 터미널에서 같은 env 에 conda 명령을 쓰지 마세요.
+#        `conda env remove` 와 설치가 겹치면 env 디렉토리가 도중에 사라져
+#        `ModuleNotFoundError: No module named 'urllib'` 같은 엉뚱한 에러로 죽습니다(실측).
+#
+#   ② PyTorch 먼저, ★ 반드시 단독으로 ★ (index-url 지정)
+#      speechbrain 이 torch/torchaudio 를 요구하므로, 먼저 깔지 않으면
+#      PyPI 기본 torch(cu12x)가 끼어들어 스택이 섞일 수 있습니다.
+#
+#        pip install --cache-dir /home/work/my-code/pip_cache \
+#            torch==2.5.1+cu121 torchaudio==2.5.1+cu121 \
+#            --index-url https://download.pytorch.org/whl/cu121
+#
+#      ※ 여기서 "Failed to initialize NumPy: No module named 'numpy'" 경고가 나오는 것은
+#        정상입니다(numpy 는 ③에서 깔림). 무시하세요.
+#
+#   ③ 나머지 패키지 (이 파일)  — 약 3분 30초
+#
+#        pip install --cache-dir /home/work/my-code/pip_cache -r requirements_h200.txt
+#
+#      ※ 이 파일에도 --extra-index-url + torch 정확 핀이 들어 있어 ②를 건너뛰고
+#        ③만 해도 결과는 같지만, 형제 repo 3개가 모두 "torch 먼저 단독"을 표준으로
+#        삼고 있어 동일하게 맞춥니다.
+#      ※ pesq 는 sdist 라 여기서 C 확장 컴파일이 일어납니다(gcc 필요, 수십 초).
+#        "Building wheel for pesq ... finished with status 'done'" 이 보이면 성공입니다.
+#      ※ ⓪의 egg-info 정리를 건너뛰면 여기서 무해한 ERROR 한 줄이 뜹니다(위 ⓪ 참고).
+#
+#   ④ 패키지 + 테스트 도구 설치 (약 33초)
+#
+#        pip install --cache-dir /home/work/my-code/pip_cache -e '.[test]'
+#
+#      ※ [test] extra = pytest + asteroid. asteroid 는 SI-SDR 등가성 검증 오라클이며
+#        런타임에는 불필요합니다(기본 백엔드 native 가 1.4배 빠름). 빼려면 `-e .` 만.
+#      ※ CPU 용 onnxruntime 은 pyproject 의 base dependencies 에 ★ 없습니다 ★ —
+#        CPU/GPU 빌드가 별개 배포본이라 같이 깔리면 충돌하므로 extra 로 분리했습니다.
+#        덕분에 `--no-deps` 없이도 ③의 onnxruntime-gpu 가 유지되고 pip check 도 깨끗합니다.
+#        H200 아닌 환경은:  pip install -e '.[cpu,test]'
+#        확인: `pip list | grep onnxruntime` → onnxruntime-gpu 한 줄만
+#              `pip check` → No broken requirements found.
+#
+#   ⑤ HF 캐시를 영속 vFolder 로 (★ 세션마다 필요 — [B-7])
+#
+#        export HF_HOME=/home/work/my-checkpoints/hf_cache
+#
+#   ⑥ 확장 지표 모델 2개 다운로드 + 검증 (~3.2 GB) — [B-5] / [B-8]
+#
+#        python scripts/download_models.py
+#
+#      받는 것: speechbrain/spkrec-ecapa-voxceleb (~89 MB, Spk-Sim)
+#               openai/whisper-large-v3          (~3.1 GB, WER — llmtse 와 동일 모델)
+#      마지막 줄이 `ALL CHECKS PASSED` 여야 합니다. 재실행은 캐시 히트로 즉시 끝납니다.
+#      옵션: --only spk / --only wer / --no-verify / --device cpu
+#
+#   ⑦ 이 환경 박제 (다음 세션 / 문제 발생 시 정답지)
+#
+#        pip freeze --all > h200_pip_freeze_$(date +%Y%m%d).txt
+#
+#      ★ `--all` 필수: 기본 pip freeze 는 setuptools/pip/wheel 을 빼버립니다.
+#        그런데 `setuptools<81` 은 이 프로젝트의 중요한 핀이라 스냅샷에 보여야 합니다([B-6]).
+#      ★ 이 스냅샷은 ★ 진단용이며 그대로 설치할 수 없습니다 ★ (실측 확인):
+#          - conda 제공 `packaging` 이 `@ file:///home/conda/...` 로 기록되는데
+#            그 경로는 존재하지 않아 pip 이 OSError 로 실패합니다.
+#          - editable 설치인 tse-eval 이 `tse-eval==0.1.0` 으로 기록되는데
+#            PyPI 에 없는 이름이라 resolve 되지 않습니다.
+#        → 재설치는 **항상 이 requirements_h200.txt** 로 하세요. 스냅샷은 대조용입니다.
+#
+#   ▸ 다음 세션부터는 `conda activate tseeval` + ⑤(export HF_HOME) 만 하면 됩니다.
+#
+# ====================================================================
+# [D] 설치 검증 (★ 필수 — 특히 EP 확인)
+# ====================================================================
+#
+#   ── D-1. 스택 확인 (sm_90 커널 + 임포트) ──────────────────────────
+#        python - <<'PY'
+#        import torch, torchaudio, numpy, onnxruntime as ort
+#        print("torch      :", torch.__version__, "| cuda", torch.version.cuda)
+#        print("arch_list  :", torch.cuda.get_arch_list())       # ← sm_90 이 있어야 함
+#        print("gpu        :", torch.cuda.get_device_name(0),
+#                              torch.cuda.get_device_capability(0))
+#        print("ort avail  :", ort.get_available_providers())    # ← CUDAExecutionProvider 필수
+#        import speechmos, speechbrain, pesq, pystoi, librosa   # ← librosa 필수 ([B-11])
+#        import transformers, accelerate, jiwer                  # ← WER 스택
+#        from importlib.metadata import version
+#        print("speechbrain:", speechbrain.__version__)
+#        print("librosa    :", librosa.__version__, "  <- 없으면 DNSMOS 전부 nan")
+#        print("transformers:", transformers.__version__, "| accelerate", accelerate.__version__)
+#        print("jiwer      :", version("jiwer"))   # ★ jiwer 에는 __version__ 속성이 없음
+#        print("numpy      :", numpy.__version__, "| torchaudio", torchaudio.__version__)
+#        print("setuptools :", version("setuptools"), " <- 81 미만이어야 함 ([B-6])")
+#        print("OK")
+#        PY
+#
+#      → arch_list 에 sm_90 이 없으면 cu121 휠이 아닌 것이 깔린 것입니다:
+#        pip install --force-reinstall torch==2.5.1+cu121 torchaudio==2.5.1+cu121 \
+#            --index-url https://download.pytorch.org/whl/cu121
+#
+#   ── D-2. DNSMOS 가 실제로 어떤 EP 를 쓰는지 (★ B-3 확인) ─────────
+#        python - <<'PY'
+#        import numpy as np, onnxruntime as ort
+#        orig = ort.InferenceSession
+#        def probe(*a, **k):
+#            s = orig(*a, **k); print("EP in use:", s.get_providers()); return s
+#        ort.InferenceSession = probe
+#        from speechmos import dnsmos
+#        sig = (np.random.randn(16000) * 0.05).astype(np.float32)
+#        print(dnsmos.run(sig, sr=16000))
+#        PY
+#
+#      → 현재는 ★ ['CPUExecutionProvider'] 가 나오는 것이 정상 ★ 입니다.
+#        speechmos 가 providers 를 넘기지 않기 때문이며, 고장이 아닙니다([B-3]).
+#        GPU 로 돌리고 싶다면 [B-2] 의 후속 작업(providers 명시 + intra_op_num_threads)을
+#        코드로 넣어야 합니다. `OMP_NUM_THREADS` 로는 해결되지 않습니다(실측 [B-2]).
+#
+#   ── D-3. 테스트 스위트 (회귀 없음 확인) ──────────────────────────
+#        cd /home/work/my-code/TSE_Eval && pytest -q       # 35 tests, CPU-only/offline
+#
+#      → dnsmos 관련 2개가 실패하면 librosa 가 없는 것입니다 ([B-11]).
+#
+#   ── D-3b. 확장 지표 모델 검증 ([C] ⑥ 에 포함되어 있음) ────────────
+#        python scripts/download_models.py                 # ALL CHECKS PASSED 확인
+#
+#   ── D-4. 합성 예제 end-to-end ────────────────────────────────────
+#        python examples/make_example.py
+#        python -m tse_eval -i examples/sample_input.csv -o examples/results.csv
+#
+#      → dnsmos_* 열이 전부 nan 이면 librosa 누락입니다 ([B-11]).
+#
+#   ── D-5. 실데이터 스모크 (모델 매니페스트가 생긴 뒤) ──────────────
+#        head -6 /home/work/my-outputs/llmtse/<run_name>/inference_test.csv > /tmp/smoke5.csv
+#        python -m tse_eval -i /tmp/smoke5.csv -o /tmp/smoke5_out.csv --est-col pred_path
+#      → --est-col 을 빼면 실패하는 것도 같이 확인해 두세요 (B-1).
+#
+# ====================================================================
+# [E] 실행 팁
+# ====================================================================
+#   ▸ 컬럼 지정 (B-1):
+#       python -m tse_eval -i <manifest>.csv -o <out>.csv --est-col pred_path
+#     세 모델 매니페스트 모두 동일하게 이 한 줄로 커버됩니다.
+#
+#   ▸ 샘플레이트: ★ 기본값이 --target-sr 24000 입니다 ★ (PORTE-v3 원본 SR)
+#     별도 플래그 없이 형제 repo 프로토콜과 일치합니다. 지표별 SR 은 [B-10] 표 참고:
+#       SI-SDR / SI-SDRi / STOI / ESTOI → 24 kHz native
+#       PESQ / DNSMOS                  → 내부에서 자동 16 kHz 다운샘플
+#     ※ 16 kHz 데이터를 평가할 때만 --target-sr 16000 을 주세요.
+#     ※ 24 kHz 를 강제로 16 kHz 로 낮추면 SI-SDR/ESTOI 가 형제 eval.py 와 어긋납니다.
+#
+#   ▸ overlap 요약: overlap_ratio 는 0.0/0.2/0.4/0.6/0.8/1.0 (test 5,000행, 각 ~833행)
+#     → 자동으로 6구간 + ALL 요약이 나옵니다. 별도 옵션 불필요.
+#
+#   ▸ 대량 평가 속도 (B-2): 현재 DNSMOS 가 가장 느린 구간입니다 — CPU 300~330 ms/utt.
+#     15,000 utt(5,000행 × 3모델) 기준 약 75~85분입니다.
+#     ★ `export OMP_NUM_THREADS=4` 는 효과가 없습니다(실측 320~350 ms/utt).
+#       가속하려면 [B-2] 의 후속 작업(SessionOptions.intra_op_num_threads + providers)이
+#       코드로 들어가야 합니다 → 70~120 ms(3~4배) / CUDA 까지면 ~13 ms(20~25배).
+#
+# ====================================================================
+# [F] Spk-Sim / WER 구현 메모 (★ 의존성·모델은 준비됨, 지표 코드는 아직 미구현)
+# ====================================================================
+#   현재 METRIC_COLUMNS 는 9열(si_sdr, si_sdri, stoi, estoi, pesq, dnsmos×4)입니다.
+#   이 파일과 scripts/download_models.py 는 **의존성과 가중치만** 준비합니다.
+#   tse_eval/metrics.py 에 지표를 추가할 때:
+#
+#   ▸ 공통
+#     - est16 / ref16 (16 kHz) 은 compute_row_metrics 안에서 PESQ/DNSMOS 용으로 이미
+#       만들어집니다. 두 지표 모두 16 kHz 이므로 그 블록에 얹는 것이 가장 쌉니다.
+#       ★ 단 현재는 PESQ 나 DNSMOS 를 요청했을 때만 est16 이 만들어집니다 —
+#         새 지표를 그 가드 조건에 추가하지 않으면 `--metrics spk_sim` 단독 실행 시
+#         est16/ref16 미정의로 NameError 가 납니다.
+#     - METRIC_COLUMNS 에 열 이름을 추가해야 CLI 검증·요약 평균이 자동으로 따라옵니다.
+#     - 기존 지표처럼 예외 시 float('nan') 을 반환하는 패턴을 지키세요.
+#     - 모델은 행마다 새로 로드하면 안 됩니다(5,000행 × 3모델). 모듈 레벨 lazy 싱글턴으로.
+#
+#   ▸ Speaker Similarity
+#     - API: `from speechbrain.inference import EncoderClassifier`
+#       (구 `speechbrain.pretrained` 는 speechbrain 1.0 에서 이전됨)
+#     - cos(emb(est16), emb(ref16)) — GT target 과 추출음의 임베딩 코사인 유사도.
+#       팀메이트 구현(evaluate_styletse.py:152-155)과 같은 정의이지만, 그쪽과 달리
+#       ★ 반드시 16 kHz 로 내려서 ★ 넣어야 합니다 ([B-9]).
+#     - 너무 짧은 구간은 건너뛰세요(팀메이트 코드는 0.5 s 미만 skip).
+#
+#   ▸ WER
+#     - llmtse/eval.py:126-128, 155-166 을 그대로 따르면 숫자가 비교 가능합니다:
+#         AutoModelForSpeechSeq2Seq.from_pretrained("openai/whisper-large-v3",
+#             torch_dtype=torch.bfloat16, low_cpu_mem_usage=True)
+#         processor(est16, sampling_rate=16000, ...) → generate(feat, language="en")
+#     - 참조 텍스트는 매니페스트의 `target_sentence` 열입니다.
+#       ⚠ StyleTSE 매니페스트에는 이 열이 없습니다(TPEX·LLM-TSE 에만 있음).
+#     - ★ 집계는 corpus micro-WER 입니다 (llmtse/eval.py:48-60): 발화별 WER 을 평균하지
+#       않고 ref/hyp 리스트를 통째로 jiwer.wer 에 넘깁니다. per-row 열은 검수용.
+#       → 현재 TSE_Eval 의 summary 는 열별 단순 평균(macro)이므로, WER 만 별도 집계
+#         경로가 필요합니다. 단순히 열을 추가하면 macro-WER 이 되어 관례와 어긋납니다.
+#     - bf16 사용(fp16 금지) — 형제 repo 공통 규칙.
+# ====================================================================
+
+
+# --- PyTorch (CUDA 12.1 build; sm_90 커널 포함 → H100/H200 동작) ------------
+#     ★ [C] ② 에서 먼저 단독 설치하는 것을 권장. 여기 핀은 안전망입니다.
+--extra-index-url https://download.pytorch.org/whl/cu121
+torch==2.5.1+cu121
+torchaudio==2.5.1+cu121
+
+# --- 데이터 / IO / 수치 -----------------------------------------------------
+numpy==1.26.4                 # <2 강제 (torch 2.5.1 ABI 호환 + 형제 repo 와 동일)
+scipy==1.15.3                 # speechbrain 요구(>=1.4.1). 형제 repo 와 동일 핀
+pandas==2.3.1                 # CSV in/out + overlap 요약
+soundfile==0.13.1             # torchaudio load 백엔드
+tqdm==4.67.1                  # 진행바
+
+# --- 지표: 참조 기반 --------------------------------------------------------
+#     SI-SDR / SI-SDRi 는 tse_eval/metrics.py 에 네이티브 구현 → 의존성 없음
+pesq==0.0.4                   # PESQ wideband(16 kHz). ★ sdist(C 확장) — gcc 필요
+pystoi==0.4.1                 # STOI / ESTOI(extended=True)
+
+# --- 지표: DNSMOS (무참조 MOS — SIG / BAK / OVRL / P.808) -------------------
+speechmos==0.0.1.1            # ONNX 모델이 휠에 번들 → 모델 다운로드 없음
+librosa==0.11.0               # ★★ DNSMOS 필수 ★★ speechmos/dnsmos.py:4 가 librosa 를
+                              #   모듈 최상단에서 import 하는데, speechmos 휠은 의존성을
+                              #   하나도 선언하지 않습니다(Requires-Dist 없음).
+                              #   → 이 줄이 없으면 dnsmos() 가 ModuleNotFoundError 를
+                              #     삼키고 ★ 모든 행의 DNSMOS 4열이 조용히 nan ★ 이 됩니다.
+                              #   실측 재현 완료. tpex 와 동일 핀. ([B-11])
+onnxruntime-gpu>=1.19.2,<1.21 # ★ tpex 와 동일 핀. py3.10 상한은 1.20.2 ([B-4])
+                              #   CPU 로 되돌리려면 이 줄을 onnxruntime==1.20.2 로 교체
+protobuf>=4.25.3,<7           # onnxruntime-gpu 가 protobuf 를 무핀 요구 → 상한 고정
+                              #   (resolve 결과 6.33.6)
+requests>=2.28                # huggingface_hub / speechbrain 다운로드 경로
+
+# --- 지표: Speaker Similarity (ECAPA-TDNN 코사인 유사도) -------------------
+#     모델: speechbrain/spkrec-ecapa-voxceleb (16 kHz, 192-dim). 첫 실행 시 ~80 MB 다운로드
+speechbrain==1.0.3            # 2025-04 릴리스. 최신 1.1.0(2026-03)도 호환되지만
+                              #   검증 사례가 많은 1.0.3 을 표준으로 둡니다.
+                              #   ※ hyperpyyaml(1.2.3) / joblib(1.5.3) / packaging 은
+                              #     speechbrain 이 끌어오는 전이 의존성이라 핀하지 않습니다.
+huggingface_hub==0.34.4       # 형제 repo 3개와 동일 핀
+sentencepiece==0.2.0          # speechbrain 하드 의존 (ECAPA 자체는 미사용)
+PyYAML==6.0.2                 # hyperpyyaml 경유. 형제 repo 와 동일 핀
+
+# --- 지표: WER (Whisper large-v3 + jiwer) ----------------------------------
+#     모델: openai/whisper-large-v3 (16 kHz). 첫 실행 시 ~3.1 GB 다운로드
+#     ★ llmtse/eval.py:126-128 과 동일 모델 → WER 숫자를 바로 비교할 수 있습니다.
+transformers==4.46.3          # 형제 repo 3개와 동일 핀 (tokenizers 0.20.3 전이)
+accelerate==1.10.0            # ★ 필수 — from_pretrained(low_cpu_mem_usage=True) 가 요구.
+                              #   없으면 ValueError: "... requires Accelerate"
+                              #   (transformers/modeling_utils.py:3578, 4085)
+jiwer==3.1.0                  # WER 계산. 형제 repo 3개와 동일 핀
+                              #   집계는 corpus micro-WER (llmtse/eval.py:48-60 관례)
+
+# --- 예방적 핀 ([B-6]) -----------------------------------------------------
+setuptools<81                 # 형제 repo 3개와 동일 계열 유지 (resolve 결과 80.10.2)
+
+# --- 개발 (테스트) ---------------------------------------------------------
+pytest>=8.0,<9                # tests/ (CPU-only / offline). 기존 requirements.txt 누락분
+                              # ※ asteroid 는 여기 넣지 않습니다 — SI-SDR 등가성 검증
+                              #   오라클로만 쓰이고 22개 패키지(pytorch-lightning 등)를
+                              #   끌고 옵니다. 필요할 때만:  pip install -e '.[test]'
+                              #   없어도 골든값 테스트는 그대로 돌아갑니다 ([B-12]).

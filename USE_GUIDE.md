@@ -2,6 +2,7 @@
 
 > 이 문서는 **처음 보는 사람도** TSE_Eval 을 바로 쓸 수 있도록 단계별로 설명합니다.
 > 개요만 빠르게 보려면 [README.md](README.md) 를 참고하세요.
+> 설치는 [INSTALL.md](INSTALL.md), **주의사항·재현성 체크리스트는 [CAVEATS.md](CAVEATS.md)** 입니다.
 
 ---
 
@@ -16,25 +17,37 @@
 7. [오버랩(overlap) 요약](#7-오버랩overlap-요약)
 8. [Python API](#8-python-api)
 9. [자주 묻는 질문 (FAQ)](#9-자주-묻는-질문-faq)
-10. [확장: WER / Speaker Similarity](#10-확장-wer--speaker-similarity)
+10. [WER / Speaker Similarity](#10-wer--speaker-similarity)
 
 ---
 
 ## 1. 설치
 
-TPEX 와 **동일한 환경**(Python 3.10.20, torch 2.5.1+cu121)을 권장합니다.
+> 🛠️ **H100 / H200 을 쓰신다면 → [INSTALL.md](INSTALL.md) 를 그대로 따라가세요.**
+> 단계별 명령·소요 시간·정상 출력·문제 해결이 모두 정리돼 있습니다. 이 문서는 **사용법** 전용입니다.
+
+그 외 환경(CPU 등)은 아래로 충분합니다. TPEX 와 **동일한 환경**(Python 3.10.20, torch 2.5.1+cu121)을 권장합니다.
 
 ```bash
-# (권장) 전용 가상환경 또는 conda env
-conda create -n tse_eval python=3.10.20 -y
-conda activate tse_eval
+# (권장) 전용 conda env
+conda create -n tseeval python=3.10.20 -y
+conda activate tseeval
 
 # 의존성 설치 (torch/torchaudio 는 requirements.txt 안의 cu121 인덱스에서 받음)
 pip install -r requirements.txt
+
+# ★ 필수 추가 — 없으면 DNSMOS 4개 열이 조용히 전부 nan 이 됩니다
+pip install librosa==0.11.0
 ```
 
-> **GPU 없이 CPU만 있어도 됩니다.** DNSMOS(ONNX)는 CPU로 돌아갑니다.
-> GPU 가속을 원하면 `onnxruntime` 대신 `onnxruntime-gpu==1.20.2` 를 설치하세요.
+> ⚠️ **`librosa` 를 빼먹지 마세요.** `speechmos` 는 의존성을 선언하지 않는데 내부에서
+> `librosa` 를 import 하고, 지표 함수는 예외를 `nan` 으로 삼킵니다.
+> 그래서 에러 메시지 없이 `dnsmos_sig/bak/ovrl/p808` 이 전 행 `nan` 이 됩니다.
+>
+> 💡 **GPU 없이 CPU만 있어도 됩니다.** DNSMOS(ONNX)는 CPU로 돌아갑니다.
+> `onnxruntime-gpu` 로 바꿔도 **DNSMOS 는 그대로 CPU 를 씁니다** — `speechmos` 가
+> 세션에 `providers` 를 넘기지 않기 때문입니다(실측 확인).
+> 자세한 속도 수치는 [INSTALL.md 의 DNSMOS 속도](INSTALL.md#dnsmos-속도-실측) 참고.
 
 설치 확인:
 
@@ -95,10 +108,17 @@ sample_0003,/data/out/0003_est.wav,/data/gt/0003.wav,/data/mix/0003.wav,100%
 | 역할 | 자동 인식 후보 |
 |---|---|
 | id | `file_id`, `id`, `utt_id`, `utterance_id`, `name`, `filename` |
-| estimate | `estimate`, `extracted`, `est`, `pred`, `prediction`, `enhanced`, `output`, `est_path`, `estimate_path` |
+| estimate | `estimate`, `extracted`, `est`, `pred`, `prediction`, `enhanced`, `output`, `est_path`, `estimate_path`, **`pred_path`**, `prediction_path`, `extracted_path`, `enhanced_path` |
 | reference | `reference`, `target`, `gt`, `ground_truth`, `clean`, `ref`, `ref_path`, `target_path` |
 | mixture | `mixture`, `mixed`, `mix`, `mixture_path`, `mixed_path`, `noisy` |
 | overlap | `overlap`, `ovr`, `overlap_ratio`, `ovr_ratio`, `overlap_pct`, `overlap_percent` |
+| 간섭화자 (선택) | `interference_path`, `infer_path`, `interference`, `interferer_path` |
+| 정답 문장 (선택, WER) | `target_sentence`, `text`, `transcript`, `reference_text` |
+
+> ✅ **TPEX / LLM-TSE / StyleTSE 매니페스트는 추가 옵션 없이 그대로 인식됩니다.**
+> 세 프로젝트 모두 추출 오디오를 `pred_path` 에 쓰고, GT 는 `target_path`, 혼합은 `mixed_path` 입니다.
+> 간섭화자 컬럼 이름만 서로 다른데(TPEX `infer_path`, 나머지 `interference_path`) 둘 다 인식합니다.
+> 이 컬럼은 통과만 시키며 아직 어떤 지표도 쓰지 않습니다(SDR/SIR/SAR 미구현).
 
 이름이 다르면 **직접 지정**하세요:
 
@@ -124,15 +144,43 @@ python -m tse_eval  -i preds.csv -o results.csv
 tse-eval            -i preds.csv -o results.csv     # pip install 후 콘솔 스크립트
 ```
 
+**매번 바뀌는 값은 CLI, 세 프로젝트가 같아야 하는 정책은 [`configs/config.yaml`](configs/config.yaml)** 에 둡니다.
+우선순위는 **CLI > config > 내장 기본값** 이고, 최종 해석 결과는 `<output>_config.json` 으로 저장됩니다.
+
 | 옵션 | 기본값 | 설명 |
 |---|---|---|
-| `--input, -i` | (필수) | 입력 CSV 경로 |
+| `--input, -i` | (필수) | 입력 매니페스트 CSV |
 | `--output, -o` | (필수) | per-row 결과 CSV 경로 |
 | `--summary-output, -s` | `<output>_summary.csv` | 요약 CSV 경로. `none` 이면 요약 생략 |
-| `--target-sr` | `16000` | 작업 샘플레이트. SI-SDR 는 무관, 지각 지표는 항상 16k |
-| `--metrics` | `all` | 계산할 지표 부분집합 (`si_sdr,pesq` 처럼 콤마로) |
-| `--id-col` / `--est-col` / `--ref-col` / `--mix-col` / `--ovr-col` | 자동 | 컬럼 이름 직접 지정 |
+| `--model-name` | 없음 | 채점 대상 이름(`tpex`/`llmtse`/`styletse`). 요약 CSV 와 sidecar 에 기록 |
+| `--group-by` | overlap 컬럼 | 층화축, 콤마 구분. `same_gender` 는 자동 파생 |
+| `--source-csv` | 없음 | PORTE-v3 소스 CSV 를 `file_id` 로 left join (선택) |
+| `--metrics` | config 의 세트 | 지표 부분집합. `spk_sim` 은 기본 포함, **`wer` 는 명시할 때만** |
+| `--si-sdr-backend` | `native` | `native` \| `asteroid` (값은 ~1e-13 이내로 동일) |
+| `--dnsmos-providers` | `cuda` | DNSMOS onnxruntime EP. `cuda`(8.4배) \| `cpu`. ⚠ 값이 ~3e-3 달라지니 비교 대상은 같은 값으로 |
+| `--dnsmos-threads` | `4` | DNSMOS intra-op 스레드. `0` 은 onnxruntime 기본(2.7배 느림 + 경고 폭주) |
+| `--config` | `configs/config.yaml` | 정책 YAML 경로 |
+| `--target-sr` | config(`24000`) | 작업 샘플레이트. SI-SDR/SI-SDRi/STOI/ESTOI 를 이 SR 로 계산하고, PESQ/DNSMOS/WER/spk_sim 만 내부에서 16 kHz 로 낮춤 ([9번 FAQ](#9-자주-묻는-질문-faq)) |
+| `--id-col` / `--est-col` / `--ref-col` / `--mix-col` / `--ovr-col` / `--txt-col` | 자동 | 컬럼 이름 직접 지정 |
 | `--no-progress` | off | 진행바 숨김 |
+
+### 요약 CSV 는 long-format 입니다
+
+축을 몇 개 주든 파일은 하나이고, 컬럼은 `model_name, axis, group, n, <지표들>` 입니다.
+축마다 자체 `ALL` 행이 들어가고, 세 프로젝트 요약을 그대로 이어 붙이면 비교표가 됩니다.
+
+```
+model_name  axis             group          n   si_sdr  si_sdri
+tpex        overlap_ratio    0.0          834  13.79    12.88
+tpex        overlap_ratio    ALL         5000  10.20     9.40
+tpex        same_gender      same        1365   9.81     9.02
+tpex        same_gender      diff        3635  10.35     9.54
+tpex        same_gender      ALL         5000  10.20     9.40
+```
+
+> `wer` 만 집계 방식이 다릅니다 — **corpus micro-WER**(전체 편집거리 합 / 전체 참조단어 합)로
+> 묶습니다. 행별 WER 을 평균하면 짧은 발화가 과대 가중되어 값이 달라지므로, 논문 표에 쓰는
+> micro 값을 요약에 넣습니다. 행별 값도 `wer` 열에 그대로 남아 검수할 수 있습니다.
 
 예시 — 일부 지표만, 요약 없이:
 
@@ -193,7 +241,7 @@ from tse_eval.metrics import si_sdr, si_sdri, pesq_wb, stoi_metric, dnsmos
 # 1) 전체 파이프라인 (DataFrame 3개 반환)
 per_row, summary, cols = evaluate_csv(
     "preds.csv",
-    target_sr=16000,
+    target_sr=24000,        # 기본값. PORTE-v3 원본 SR
     est_col=None,           # None 이면 자동 인식
     ovr_col=None,
 )
@@ -201,14 +249,15 @@ per_row.to_csv("out.csv", index=False)
 summary.to_csv("out_summary.csv", index=False)
 
 # 2) 배열 하나로 개별 계산 (numpy 1-D, float)
-snr   = si_sdr(est, ref)             # dB
-snri  = si_sdri(est, ref, mix)       # dB
-estoi = stoi_metric(ref, est, extended=True)
-pesq  = pesq_wb(ref, est)            # ref/est 는 16kHz 여야 함
-mos   = dnsmos(est)                  # {'dnsmos_sig':..,'dnsmos_bak':..,'dnsmos_ovrl':..,'dnsmos_p808':..}
+snr   = si_sdr(est, ref)                    # dB, SR 무관
+snri  = si_sdri(est, ref, mix)              # dB, SR 무관
+estoi = stoi_metric(ref, est, 24000, extended=True)   # 3번째 인자 = 입력 SR (기본 16000)
+pesq  = pesq_wb(ref, est)                   # ★ ref/est 는 16 kHz 여야 함
+mos   = dnsmos(est)                         # ★ est 는 16 kHz 여야 함
+                                            # {'dnsmos_sig':..,'dnsmos_bak':..,'dnsmos_ovrl':..,'dnsmos_p808':..}
 
-# 3) 한 행의 모든 지표
-row = compute_row_metrics(est, ref, mix, sr=16000)   # dict, 키 = METRIC_COLUMNS
+# 3) 한 행의 모든 지표 (SR 리샘플을 알아서 처리)
+row = compute_row_metrics(est, ref, mix, sr=24000)   # dict, 키 = METRIC_COLUMNS
 ```
 
 ---
@@ -216,7 +265,19 @@ row = compute_row_metrics(est, ref, mix, sr=16000)   # dict, 키 = METRIC_COLUMN
 ## 9. 자주 묻는 질문 (FAQ)
 
 **Q. 샘플레이트가 24 kHz(또는 8 kHz)인데 괜찮나요?**
-네. 내부에서 자동 리샘플합니다. SI-SDR 은 샘플레이트에 무관하고, PESQ/STOI/DNSMOS 는 항상 16 kHz 로 맞춰 계산합니다.
+네. `--target-sr` 로 작업 SR 을 정하면(**기본 24000**) 오디오를 그 SR 로 로드하고, 16 kHz 전용 지표만 내부에서 자동으로 낮춥니다. 지표별로 계산 SR 이 다릅니다:
+
+| 지표 | 계산 SR | 이유 |
+|---|---|---|
+| SI-SDR / SI-SDRi | `--target-sr` (native) | 샘플레이트에 무관한 정의 |
+| STOI / ESTOI | `--target-sr` (native) | `pystoi` 가 내부에서 10 kHz 로 리샘플 → 미리 16k 로 낮추면 이중 리샘플만 추가됨 |
+| PESQ | **16 kHz** | ITU-T P.862 가 8/16 kHz 만 정의 |
+| DNSMOS | **16 kHz** | 16 kHz 학습 모델 (`speechmos` 가 다른 SR 을 거부) |
+
+이 프로토콜은 형제 프로젝트(TPEX / LLM-TSE / StyleTSE)의 `eval.py` 와 동일하므로, 같은 오디오에 대해 같은 숫자가 나옵니다.
+
+**Q. `dnsmos_*` 4개 열이 전부 `nan` 입니다.**
+거의 항상 **`librosa` 미설치**입니다. `speechmos` 는 의존성을 선언하지 않는데 내부에서 `librosa` 를 import 하고, 지표 함수는 예외를 `nan` 으로 삼키기 때문에 에러 메시지 없이 조용히 실패합니다. `pip install librosa==0.11.0` 로 해결됩니다.
 
 **Q. 추출/정답/혼합의 길이가 조금씩 다릅니다.**
 공통 최소 길이로 잘라(trim) 정렬합니다. 큰 차이가 나면 정렬 문제일 수 있으니 확인하세요.
@@ -235,22 +296,55 @@ row = compute_row_metrics(est, ref, mix, sr=16000)   # dict, 키 = METRIC_COLUMN
 
 ---
 
-## 10. 확장: WER / Speaker Similarity
+## 10. WER / Speaker Similarity
 
-현재 기본 배포는 **핵심 6종 지표**만 포함합니다(가벼운 설치·오프라인 동작 목적).
-아래 지표는 추가 의존성이 필요하여 기본에서 제외했지만, 확장 지점을 안내합니다.
+두 지표는 **구현 완료**되었습니다. 차이는 기본 활성 여부뿐입니다:
 
-- **WER (Word Error Rate)** — ASR 필요
-  ```bash
-  pip install openai-whisper jiwer      # 또는 faster-whisper
-  ```
-  Whisper 로 추출 음성과 GT 음성을 각각 전사한 뒤 `jiwer.wer()` 로 비교하는 방식을
-  `tse_eval/metrics.py` 에 추가하면 됩니다. (첫 실행 시 ASR 모델 다운로드가 발생합니다.)
+| 지표 | 기본 | 15,000 utt 비용 | 켜는 방법 |
+|---|---|--:|---|
+| **spk_sim** (ECAPA) | ✅ 켜짐 | 20분 | 자동 |
+| **WER** (Whisper large-v3) | ❌ 꺼짐 | 178분 | `--metrics all,wer` 또는 config 의 `- wer` 주석 해제 |
 
-- **Speaker Similarity** — 화자 임베딩 모델 필요
-  ```bash
-  pip install resemblyzer               # 또는 speechbrain
-  ```
-  추출/GT 의 화자 임베딩 코사인 유사도로 계산합니다.
+```bash
+# 논문 표용 — WER 까지 전부
+python -m tse_eval -i manifest.csv -o out.csv --model-name tpex \
+    --metrics all,wer --group-by overlap_ratio,same_gender
+```
 
-> 필요해지면 위 두 지표를 `--wer`, `--spk-sim` 같은 **옵션 플래그(기본 off)** 로 추가하는 것을 권장합니다.
+> **WER 요약은 corpus micro-WER** 입니다(전체 편집거리 합 / 전체 참조단어 합).
+> 행별 `wer` 열도 남으니 검수에 쓰고, 표에는 요약값을 쓰세요.
+> `target_sentence` 가 없는 행(StyleTSE 매니페스트)은 자동으로 제외되며,
+> `--source-csv` 로 PORTE-v3 를 join 하면 그 열을 가져올 수 있습니다.
+
+### 모델 준비
+
+[`requirements_h200.txt`](requirements_h200.txt) 에 의존성이 핀되어 있고, 가중치는 스크립트 하나로 받습니다:
+
+```bash
+export HF_HOME=/home/work/my-checkpoints/hf_cache   # ★ 영속 저장소 (홈은 세션 종료 시 삭제됨)
+python scripts/download_models.py                   # 둘 다 (~3.2 GB) + 검증
+python scripts/download_models.py --only spk        # ECAPA 만
+python scripts/download_models.py --only wer        # Whisper 만
+```
+
+| 지표 | 모델 | 크기 | 계산 SR |
+|---|---|---|---|
+| **Speaker Similarity** | `speechbrain/spkrec-ecapa-voxceleb` (ECAPA-TDNN, 192-dim) | ~89 MB | **16 kHz** |
+| **WER** | `openai/whisper-large-v3` (+ `jiwer`) | ~3.1 GB | **16 kHz** |
+
+`whisper-large-v3` 은 LLM-TSE 의 `eval.py` 와 같은 모델이므로 WER 숫자를 바로 비교할 수 있습니다.
+
+### ⚠️ 알아둘 점
+
+- **둘 다 16 kHz 전용입니다.** 파이프라인이 자동으로 리샘플하므로 신경 쓸 필요는 없지만,
+  직접 함수를 호출할 때는 반드시 16 kHz 를 넘기세요. Whisper 는 다른 SR 을 `ValueError` 로
+  거부하는 반면 **ECAPA 는 에러 없이 그냥 틀린 임베딩을 냅니다**(`encode_batch()` 는 리샘플 안 함).
+- 모델은 **한 번만 로드**되어 전 행에 재사용됩니다(모듈 레벨 lazy 싱글턴).
+  Whisper 최초 로드에 약 9초가 걸립니다.
+- WER 참조 텍스트는 매니페스트의 `target_sentence` 열입니다.
+  **StyleTSE 매니페스트에는 이 열이 없어** 그 행들은 `nan` 이 되고 micro 집계에서 제외됩니다.
+  `--source-csv` 로 PORTE-v3 를 join 하면 열을 가져올 수 있습니다.
+- 행별 출력에 `wer_hyp`(Whisper 전사 결과) 열이 함께 남아 오류를 눈으로 확인할 수 있습니다.
+
+모델 id 등은 [`configs/config.yaml`](configs/config.yaml) 에서 바꿀 수 있고,
+실제 사용된 값은 `<output>_config.json` 에 기록됩니다.
