@@ -172,12 +172,20 @@ def si_sdr_family(est: np.ndarray, ref: np.ndarray, mix: np.ndarray) -> Dict[str
     counterpart, ``input_si_sdr_pairwise``, is produced by
     :func:`compute_row_metrics` from the *untrimmed* mixture and reference.
 
+    ★ The three signals are trimmed to one common window here, not left to each
+    metric's own pairwise alignment. Both terms must be measured over the *same*
+    samples or ``si_sdri`` compares two different windows — and the two backends
+    would disagree whenever the mixture happened to be the shortest of the three.
+    :func:`compute_row_metrics` already trims before calling, so this is a no-op
+    on that path and a safety net for direct callers.
+
     Args:
         est: Estimate, ref: reference, mix: mixture — all 1-D at the same rate.
 
     Returns:
         Dict with ``si_sdr``, ``si_sdri``, ``input_si_sdr``.
     """
+    est, ref, mix = align_triple(est, ref, mix)
     out = si_sdr(est, ref)
     inp = si_sdr(mix, ref)
     improvement = float("nan") if (np.isnan(out) or np.isnan(inp)) else out - inp

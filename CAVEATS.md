@@ -112,16 +112,54 @@ CUDA EP 와 CPU EP 의 DNSMOS 값은 부동소수점 커널 차이로 **최대 �
 
 ### 3-1. `input_si_sdr` 두 종류의 차이
 
-`SI-SDRi = SI-SDR − input_si_sdr` 항등식을 CSV 에서 바로 확인할 수 있도록 두 열을 냅니다.
+둘 다 계산하는 값은 **똑같이 `SI-SDR(mix, ref)`** 입니다. 다른 것은 **어느 구간(창)까지
+잘라서 계산하느냐** 하나뿐입니다.
 
-| 열 | 계산 방식 | 성질 |
+| 열 | 창 | est 길이에 의존 |
 |---|---|---|
-| `input_si_sdr` | est/ref/mix 를 **3-way trim** 후 계산 | 형제 `eval.py` 와 동일. **est 길이에 의존** |
-| `input_si_sdr_pairwise` | mix/ref 만으로 계산 | **추출 결과와 무관** → 같은 샘플이면 프로젝트가 달라도 동일 |
+| `input_si_sdr` | `min(len(est), len(ref), len(mix))` — **3-way** | ✅ |
+| `input_si_sdr_pairwise` | `min(len(ref), len(mix))` — **est 무시** | ❌ |
 
-리뷰어가 지적한 "SI-SDRi − SI-SDR 이 일정하지 않다" 는 바로 앞쪽(3-way) 성질 때문에 생깁니다.
-`input_si_sdr_pairwise` 가 세 프로젝트에서 동일하다는 것이 **하나의 파이프라인으로 채점했다는
-직접 증거**입니다.
+**두 값이 갈라지는 조건은 딱 하나**: `len(est)` 가 셋 중 가장 짧을 때.
+est 가 mix/ref 보다 길거나 같으면 두 창이 같아지므로 **두 값도 완전히 동일**합니다.
+
+#### 예시 — `porte_v3_test_0000002` (overlap 0.8, ref/mix 모두 9.05초)
+
+같은 샘플을 두 모델이 채점하는데 **출력 길이만** 다른 상황:
+
+| | 모델 A (9.05초 전체 출력) | 모델 B (5.43초만 출력) |
+|---|--:|--:|
+| est 길이 | 9.05 s | 5.43 s |
+| 3-way 창 | 9.05 s | **5.43 s** ← 짧아짐 |
+| pairwise 창 | 9.05 s | 9.05 s |
+| `input_si_sdr` | −5.9470 dB | **−3.6943 dB** |
+| `input_si_sdr_pairwise` | −5.9470 dB | **−5.9470 dB** ← 그대로 |
+| `si_sdr` / `si_sdri` | −5.9214 / +0.0257 | −3.7031 / −0.0088 |
+
+`input_si_sdr` 은 **2.25 dB 움직였고**, `input_si_sdr_pairwise` 는 두 모델에서 동일합니다.
+overlap 0.8 샘플이라 앞 5.43초와 뒤 3.6초의 간섭 정도가 달라서, 창이 짧아지면
+"혼합이 얼마나 나쁜가"의 기준 자체가 바뀌기 때문입니다.
+
+**이것이 리뷰어가 지적한 현상입니다.** `si_sdri − si_sdr = −input_si_sdr` 인데,
+3-way 를 쓰면 이 값이 모델 출력 길이에 따라 달라집니다. 반면 pairwise 는 `mix`/`ref` 만으로
+정해지므로 같은 샘플이면 세 프로젝트에서 같은 값이 나오고, 그것이 **하나의 파이프라인으로
+채점했다는 직접 증거**가 됩니다.
+
+#### asteroid 에만 있는 값인가?
+
+- **`input_si_sdr`**: 이름은 asteroid `get_metrics` 가 붙여주는 것이지만
+  (`metrics_list=['si_sdr']` → 반환 키 `['input_si_sdr', 'si_sdr']`),
+  값은 그냥 `SI-SDR(mix, ref)` 입니다. 우리 native 로 직접 계산해도
+  **4.4e-15** 이내로 같습니다. asteroid 가 있어야 얻는 값이 아닙니다.
+- **`input_si_sdr_pairwise`**: **asteroid 에는 없고, asteroid 로는 만들 수 없습니다.**
+  `get_metrics` 는 mix/ref/est 세 개가 같은 길이여야 하고 다르면 `AssertionError` 를 냅니다.
+  즉 "est 를 무시하는 창"이라는 개념 자체가 없습니다. 이 열은 이 repo 의 추가 기능입니다.
+
+> 두 백엔드는 길이가 어긋난 경우까지 포함해 동일한 값을 냅니다
+> (`tests/test_backends.py::test_backends_agree_under_length_mismatch`).
+> 예전에는 `--si-sdr-backend asteroid` 로 mix 가 ref 보다 짧은 행을 만나면
+> `AssertionError` 로 그 행이 통째로 실패했는데, 우리 계약("길이가 다르면 자른다")에 맞게
+> asteroid 에 넘기기 전에 정렬하도록 고쳤습니다.
 
 ### 3-2. WER 은 corpus micro 로 집계해야 합니다
 

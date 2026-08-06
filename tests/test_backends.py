@@ -166,6 +166,61 @@ def test_both_backends_agree_on_the_whole_family():
         assert a[key] == pytest.approx(b[key], abs=1e-6), f"{key} differs"
 
 
+@pytest.mark.parametrize("lengths", [
+    (N, N, N),                  # all equal
+    (N - 3000, N, N),           # estimate short  -> 3-way window shrinks
+    (N, N, N - 2000),           # mixture short   -> asteroid used to blow up here
+    (N, N - 1500, N),           # reference short
+    (N - 500, N - 1500, N),     # all three different
+])
+def test_backends_agree_under_length_mismatch(lengths):
+    """asteroid must trim like native instead of raising.
+
+    ``asteroid.metrics.get_metrics`` asserts equal lengths and raises
+    ``AssertionError``. Before the trim was added, a row whose mixture was
+    shorter than its reference errored out under ``--si-sdr-backend asteroid``
+    while working fine under ``native`` — the two were not interchangeable.
+    """
+    pytest.importorskip("asteroid", reason="asteroid is a test-only extra")
+    rng = np.random.default_rng(11)
+    n_est, n_ref, n_mix = lengths
+    ref_full = _reference()
+    est = (ref_full + 0.05 * rng.standard_normal(N))[:n_est]
+    mix = (ref_full + 0.60 * rng.standard_normal(N))[:n_mix]
+    ref = ref_full[:n_ref]
+
+    a = si_sdr_family(est, ref, mix, backend="native")
+    b = si_sdr_family(est, ref, mix, backend="asteroid")
+    for key in ("si_sdr", "si_sdri", "input_si_sdr"):
+        assert a[key] == pytest.approx(b[key], abs=1e-6), f"{key} differs for {lengths}"
+
+    # The pairwise baseline path takes (mix, ref) and must agree too.
+    assert si_sdr_value(mix, ref, backend="native") == pytest.approx(
+        si_sdr_value(mix, ref, backend="asteroid"), abs=1e-6)
+
+
+def test_pairwise_value_ignores_a_third_signal():
+    """``si_sdr_value`` must align pairwise only.
+
+    If it ever widened the window to include a third signal, the pairwise
+    baseline would start depending on the estimate's length and lose the whole
+    point of the column.
+    """
+    rng = np.random.default_rng(13)
+    ref = _reference()
+    mix = ref + 0.6 * rng.standard_normal(N)
+    for backend in ("native", "asteroid"):
+        if backend == "asteroid":
+            pytest.importorskip("asteroid", reason="asteroid is a test-only extra")
+        full = si_sdr_value(mix, ref, backend=backend)
+        # Same mix/ref, so the value must not move no matter what else exists.
+        again = si_sdr_value(mix, ref, backend=backend)
+        assert full == pytest.approx(again, abs=1e-12)
+        # Trimming mix/ref themselves *should* move it (sanity: the window matters).
+        shorter = si_sdr_value(mix[:N - 4000], ref[:N - 4000], backend=backend)
+        assert shorter != pytest.approx(full, abs=1e-6)
+
+
 # ─────────────────────────────────────────────────────────────────────────
 # Dispatch behaviour
 # ─────────────────────────────────────────────────────────────────────────

@@ -33,6 +33,7 @@ from typing import Dict
 
 import numpy as np
 
+from .audio import align_pair, align_triple
 from .metrics import si_sdr as _native_si_sdr, si_sdr_family as _native_family
 
 BACKENDS = ("native", "asteroid")
@@ -51,7 +52,15 @@ def available_backends() -> Dict[str, bool]:
 
 def _asteroid_family(est: np.ndarray, ref: np.ndarray, mix: np.ndarray
                      ) -> Dict[str, float]:
-    """SI-SDR family via asteroid. Requires equal-length 1-D inputs."""
+    """SI-SDR family via asteroid.
+
+    ★ Inputs are trimmed to a common length first. ``get_metrics`` asserts that
+    all three arrays match and raises ``AssertionError`` otherwise, whereas this
+    project's contract is "unequal lengths are trimmed, never padded"
+    (:func:`tse_eval.audio.align_triple`). Without this trim the asteroid backend
+    would blow up on rows the native backend handles fine, which breaks the
+    interchangeability the two backends are supposed to guarantee.
+    """
     try:
         from asteroid.metrics import get_metrics
     except ImportError as exc:                              # pragma: no cover
@@ -61,10 +70,11 @@ def _asteroid_family(est: np.ndarray, ref: np.ndarray, mix: np.ndarray
             "--si-sdr-backend native (numerically equivalent)."
         ) from exc
 
+    est, ref, mix = align_triple(np.asarray(est, dtype=np.float64),
+                                 np.asarray(ref, dtype=np.float64),
+                                 np.asarray(mix, dtype=np.float64))
     res = get_metrics(
-        np.asarray(mix, dtype=np.float64)[None, :],
-        np.asarray(ref, dtype=np.float64)[None, :],
-        np.asarray(est, dtype=np.float64)[None, :],
+        mix[None, :], ref[None, :], est[None, :],
         sample_rate=16_000,          # SI-SDR is rate-agnostic; value is unused
         metrics_list=["si_sdr"],     # ★ never sdr/sir/sar/stoi/pesq
     )
@@ -96,11 +106,22 @@ def si_sdr_family(est: np.ndarray, ref: np.ndarray, mix: np.ndarray,
 
 def si_sdr_value(est: np.ndarray, ref: np.ndarray,
                  backend: str = DEFAULT_BACKEND) -> float:
-    """Single SI-SDR value via ``backend`` (used for the pairwise baseline)."""
+    """Single SI-SDR value between two signals, via ``backend``.
+
+    Used for ``input_si_sdr_pairwise``, where the caller passes ``(mix, ref)``.
+    ★ Alignment here is **pairwise on purpose** — trimming to
+    ``min(len(a), len(b))`` and nothing else. That is what makes the pairwise
+    baseline independent of the estimate: bring a third signal into the window
+    and the value would start moving with the estimate's length, which is exactly
+    the property this column exists to avoid.
+    """
     if backend == "native":
-        return _native_si_sdr(est, ref)
+        return _native_si_sdr(est, ref)             # aligns pairwise internally
     if backend == "asteroid":
         # asteroid's entry point always wants a mixture; reuse ref as a stand-in
-        # since only the est-vs-ref term is read back.
-        return _asteroid_family(est, ref, ref)["si_sdr"]
+        # since only the est-vs-ref term is read back. Align pairwise *first* so
+        # the stand-in cannot widen or narrow the window.
+        a, b = align_pair(np.asarray(est, dtype=np.float64),
+                          np.asarray(ref, dtype=np.float64))
+        return _asteroid_family(a, b, b)["si_sdr"]
     raise ValueError(f"Unknown si_sdr backend {backend!r}. Valid: {list(BACKENDS)}")

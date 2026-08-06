@@ -136,6 +136,50 @@ def test_pairwise_baseline_is_independent_of_the_estimate():
     assert a["input_si_sdr"] == pytest.approx(a["input_si_sdr_pairwise"], abs=1e-12)
 
 
+def test_two_baselines_are_equal_exactly_when_lengths_allow_it():
+    """The two baselines differ *only* because of the window they use.
+
+    ``input_si_sdr``          -> min(len(est), len(ref), len(mix))   (3-way)
+    ``input_si_sdr_pairwise`` -> min(len(ref), len(mix))             (est ignored)
+
+    So they coincide whenever ``len(est) >= min(len(ref), len(mix))``, and only
+    diverge when the estimate is the shortest of the three.
+    """
+    _, ref, mix = _triple()
+
+    # est at least as long as mix/ref -> identical
+    for est_len in (len(ref), len(ref) + 5000):
+        est = np.resize(_triple()[0], est_len)
+        row = compute_row_metrics(est, ref, mix, 16_000, metrics={"si_sdri"})
+        assert row["input_si_sdr"] == pytest.approx(
+            row["input_si_sdr_pairwise"], abs=1e-12), f"est_len={est_len}"
+
+    # est shortest -> the 3-way window shrinks, so the values must part company
+    short, _, _ = _triple(est_len=9_000)
+    row = compute_row_metrics(short, ref, mix, 16_000, metrics={"si_sdri"})
+    assert row["input_si_sdr"] != pytest.approx(
+        row["input_si_sdr_pairwise"], abs=1e-6)
+
+
+def test_identity_holds_for_both_backends_end_to_end():
+    """si_sdri == si_sdr - input_si_sdr under either backend, mismatched or not."""
+    for est_len in (None, 9_000):
+        est, ref, mix = _triple(est_len=est_len)
+        rows = {}
+        for backend in ("native", "asteroid"):
+            if backend == "asteroid":
+                pytest.importorskip("asteroid", reason="asteroid is a test-only extra")
+            row = compute_row_metrics(est, ref, mix, 16_000, metrics={"si_sdri"},
+                                      si_sdr_backend=backend)
+            assert row["si_sdri"] == pytest.approx(
+                row["si_sdr"] - row["input_si_sdr"], abs=1e-9)
+            rows[backend] = row
+        if len(rows) == 2:
+            for key in ("si_sdr", "si_sdri", "input_si_sdr", "input_si_sdr_pairwise"):
+                assert rows["native"][key] == pytest.approx(
+                    rows["asteroid"][key], abs=1e-6), f"{key} (est_len={est_len})"
+
+
 def test_trimmed_baseline_matches_a_manual_trim():
     """Sanity: the 3-way path is exactly 'trim, then compute'."""
     est, ref, mix = _triple(est_len=9_000)
