@@ -23,7 +23,29 @@ dependencies = [
     "pesq",
     "pystoi",
     "speechmos",
-    "onnxruntime",
+    "librosa",        # ★ speechmos imports it but declares no deps; without it
+                      #   every DNSMOS column comes out silently NaN
+    "PyYAML",         # configs/config.yaml
+]
+
+# An ONNX runtime is required for DNSMOS but is deliberately NOT a base
+# dependency: the CPU and GPU builds are separate distributions that must not
+# both be installed. Pick one.
+#   H100/H200  -> requirements_h200.txt already pins onnxruntime-gpu, so
+#                 `pip install -e . --no-deps` keeps it intact. Declaring the CPU
+#                 build here instead made `pip check` complain forever.
+#   otherwise  -> pip install -e '.[cpu]'
+[project.optional-dependencies]
+cpu = ["onnxruntime"]
+gpu = ["onnxruntime-gpu>=1.19.2,<1.21"]
+# asteroid is the equivalence oracle for tests/test_backends.py only. It is NOT a
+# runtime dependency: `native` is the default SI-SDR backend and matches asteroid
+# to ~1e-13, while installing asteroid pulls in 22 further packages
+# (pytorch-lightning, torchmetrics, mir_eval, ...). Without it the golden-value
+# tests still run; the live-comparison tests skip.
+test = [
+    "pytest>=8,<9",
+    "asteroid==0.7.0",
 ]
 
 [project.scripts]
