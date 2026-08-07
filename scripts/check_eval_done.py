@@ -38,9 +38,12 @@ DEFAULT_RUNS = [
 # 보고할 지표. wer 은 corpus micro-WER(총 edits / 총 words)로 집계되며 행별 WER 의
 # 평균과 다르다 — 논문에서 보고하는 쪽은 micro 다.
 KEYS = ("si_sdr", "si_sdri", "input_si_sdr", "stoi", "estoi", "pesq",
-        "dnsmos_sig", "dnsmos_bak", "dnsmos_ovrl", "dnsmos_p808", "wer", "spk_sim")
+        "dnsmos_sig", "dnsmos_bak", "dnsmos_ovrl", "dnsmos_p808", "wer", "spk_sim",
+        # Companions — the un-normalised variants, shown so a conclusion can be
+        # checked against them rather than resting on the normalisation choice.
+        "dnsmos_ovrl_clipped", "wer_raw")
 
-LOWER_IS_BETTER = {"wer"}
+LOWER_IS_BETTER = {"wer", "wer_raw"}
 
 
 def main(argv: "list[str]") -> int:
@@ -123,6 +126,11 @@ def main(argv: "list[str]") -> int:
             "target_sr": cfg.get("target_sr"),
             "metrics": len(cfg.get("metrics") or []),
             "dnsmos_actual": tuple((cfg.get("dnsmos") or {}).get("actual_providers") or ()),
+            # ★ Both normalisations change the reported numbers (DNSMOS ~0.34 MOS,
+            #   WER ~7 pp), so a mismatch here invalidates the comparison just as
+            #   surely as a different model would.
+            "dnsmos_normalize": (cfg.get("dnsmos") or {}).get("normalize"),
+            "wer_normalize": (cfg.get("wer") or {}).get("normalize"),
             "wer_model": (cfg.get("wer") or {}).get("model_id"),
             "spk_model": (cfg.get("spk_sim") or {}).get("model_id"),
         }

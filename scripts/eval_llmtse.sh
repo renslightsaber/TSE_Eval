@@ -53,6 +53,10 @@ export HF_HOME="${HF_HOME:-/home/work/my-checkpoints/hf_cache}"
 # ★ `--metrics all,wer` 는 동작하지 않습니다 — cli._resolve_metrics 는 인자 *전체*가
 #   정확히 'all' 일 때만 config 세트로 해석하므로 'all,wer' 는 Unknown metric(s): ['all']
 #   로 종료합니다. 그래서 여기서는 열거합니다(sh 만 봐도 무엇을 쟀는지 읽히는 이점도 있음).
+# 이 13개를 요청하면 동반 컬럼 5개(dnsmos_*_clipped 4개 + wer_raw)가 자동으로 함께
+# 나옵니다(metrics.COMPANION_METRICS) — 같은 Whisper 패스·같은 ONNX 세션에서 얻으므로
+# 추가 비용이 DNSMOS 재호출분(ckpt 당 +15분)뿐입니다. 정규화 여부에 결론이 의존하지
+# 않음을 보이려면 두 값이 다 있어야 하므로 목록에 적지 않아도 따라옵니다.
 METRICS="${METRICS:-si_sdr,si_sdri,input_si_sdr,input_si_sdr_pairwise,stoi,estoi,pesq,dnsmos_sig,dnsmos_bak,dnsmos_ovrl,dnsmos_p808,wer,spk_sim}"
 
 # 계층화 축. same_gender 는 target_gender/infer_gender 에서 파생됩니다(evaluate.add_derived_axes).
@@ -367,6 +371,27 @@ print(f"    NaN 있는 지표                : {nz if nz else '없음'}")
 if nz:
     problems.append(f"NaN 이 있는 지표: {nz}")
 
+# 4b. 정규화가 실제로 걸렸는가.
+#     DNSMOS 는 레벨에, WER 은 대소문자·구두점에 민감합니다. 둘 다 예전에는 조용히
+#     틀린 값을 내던 지점이라, 정규화값과 비정규화값이 *다르다*는 것 자체를 확인합니다.
+#     차이가 0 이면 정규화가 적용되지 않았거나 입력이 이미 정상 레벨이라는 뜻입니다.
+if {"dnsmos_ovrl", "dnsmos_ovrl_clipped"} <= set(df.columns):
+    a, b = df["dnsmos_ovrl"].mean(), df["dnsmos_ovrl_clipped"].mean()
+    print(f"    dnsmos_ovrl 정규화 / 클리핑  : {a:.4f} / {b:.4f}   (차 {a - b:+.4f})")
+    if abs(a - b) < 1e-6:
+        problems.append(
+            "dnsmos_ovrl 과 _clipped 이 같습니다 — 정규화가 적용되지 않았거나 "
+            "예측이 이미 ±1 안에 있습니다(후자면 정상)")
+if {"wer", "wer_raw"} <= set(df.columns) and df["wer"].notna().any():
+    def _micro(e, w):
+        e, w = df[e].to_numpy(float), df[w].to_numpy(float)
+        k = ~(pd.isna(e) | pd.isna(w))
+        return float(e[k].sum() / w[k].sum()) if w[k].sum() > 0 else float("nan")
+    a, b = _micro("wer_edits", "wer_words"), _micro("wer_raw_edits", "wer_raw_words")
+    print(f"    micro-WER 정규화 / 원시      : {a:.4f} / {b:.4f}   (차 {a - b:+.4f})")
+    if abs(a - b) < 1e-6:
+        problems.append("wer 과 wer_raw 가 같습니다 — 텍스트 정규화가 적용되지 않았습니다")
+
 # 5. sidecar — 출처. 두 ckpt 가 서로 다른 설정으로 채점되면 비교가 무의미합니다.
 with open(sidecar) as fh:
     sc = json.load(fh)
@@ -392,7 +417,8 @@ s = pd.read_csv(summary_csv)
 allrow = s[s["group"] == "ALL"]
 if len(allrow):
     show = [c for c in ("n", "si_sdr", "si_sdri", "input_si_sdr", "estoi",
-                        "pesq", "dnsmos_ovrl", "wer", "spk_sim") if c in allrow.columns]
+                        "pesq", "dnsmos_ovrl", "dnsmos_ovrl_clipped",
+                        "wer", "wer_raw", "spk_sim") if c in allrow.columns]
     print(f"    ── 전체 ({len(df)}행) ──")
     for c in show:
         v = allrow.iloc[0][c]
