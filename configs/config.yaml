@@ -27,6 +27,19 @@ target_sr: 24000
 # The two agree to ~1e-13; tests/test_backends.py pins that. `native` is the
 # default because `asteroid` pulls in 22 more packages (pytorch-lightning,
 # torchmetrics, mir_eval, ...) and is declared only as a test extra.
+#
+# Measured on 30 real LLM-TSE predictions (PORTE-v3 test, 24 kHz, 2026-08-07):
+#     native    6.73 ms/utt        asteroid   26.62 ms/utt   (3.96x)
+#     max |native - asteroid|:  si_sdr 1.76e-11 · si_sdri 1.10e-11
+#   -> Identical to 4 decimals. Pick either; the only real divergence is a silent
+#      reference (native -> nan and the row drops; asteroid -> -80 dB floor, which
+#      drags the mean). PORTE-v3 has none: min zero-mean energy 4.10e+01 over a
+#      400-target sample, i.e. 9 orders above eps, 0/400 below.
+#
+# ★ Whichever you choose, EVERY system in a comparison must use the same one.
+#   The per-run sidecar records `si_sdr_backend`, so a mismatch is detectable
+#   afterwards. scripts/eval_llmtse.sh passes --si-sdr-backend explicitly rather
+#   than inheriting this default, so the protocol is readable from the script.
 si_sdr_backend: native
 
 # Metric set for a default run.
@@ -50,8 +63,15 @@ metrics:
   - dnsmos_p808
   - spk_sim                  # ECAPA, ~20 min / 15,000 utt — cheap enough to keep on
   # - wer                    # Whisper large-v3, ~178 min / 15,000 utt.
-                             # Left off so iteration stays fast. Turn it on for the
-                             # paper run with:  --metrics all,wer   (or list it here)
+                             # Left off so iteration stays fast.
+  #
+  # ★ To turn WER on, uncomment the line above — or name every metric you want
+  #   on the command line. `--metrics all,wer` does NOT work: cli._resolve_metrics
+  #   treats 'all' specially only when it is the *entire* argument, so 'all,wer'
+  #   exits with "Unknown metric(s): ['all']". Enumerating is also self-documenting,
+  #   which is why scripts/eval_llmtse.sh lists all 13 explicitly:
+  #     --metrics si_sdr,si_sdri,input_si_sdr,input_si_sdr_pairwise,stoi,estoi,\
+  #               pesq,dnsmos_sig,dnsmos_bak,dnsmos_ovrl,dnsmos_p808,wer,spk_sim
 
 # DNSMOS onnxruntime settings. speechmos creates its ONNX sessions with no
 # options and no providers at all, which costs a lot on this machine.
