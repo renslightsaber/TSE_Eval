@@ -39,7 +39,32 @@ CSV 하나를 넣으면 → 표준 음성 품질 지표를 계산해 → 결과 
 | **WER** ⚙️ | Whisper large-v3 전사 오류율 (`target_sentence` 대비) | 텍스트 참조 | 추출, 정답문장 | **16 kHz** |
 
 ⚙️ = **기본 off**. WER 은 15,000 utt 기준 약 178분이 추가되어 반복 실험이 무거워지므로,
-논문 표를 만들 때만 `--metrics all,wer` 처럼 명시해 켭니다. `spk_sim`(약 20분)은 기본 포함입니다.
+논문 표를 만들 때만 켭니다 — `configs/config.yaml` 의 `# - wer` 주석을 해제하거나 지표를
+명시적으로 열거하세요(`--metrics all,wer` 는 **동작하지 않습니다**: `all` 은 인자 전체일 때만
+특별 처리됩니다). `spk_sim`(약 20분)은 기본 포함입니다.
+
+### 🔬 정규화 정책 — 반드시 세 프로젝트가 동일해야 합니다
+
+두 지표는 **입력을 어떻게 다듬느냐에 따라 값이 달라집니다.** 둘 다 예전에 에러도 `nan` 도
+없이 조용히 틀린 값을 냈던 지점이라, 정규화값과 비정규화값을 **함께 기록**합니다.
+
+| 컬럼 | 내용 |
+|---|---|
+| `dnsmos_*` | rms **−26 dBov**(ITU-T P.56)로 정규화 후 측정 ← **보고용** |
+| `dnsmos_*_clipped` | ±1 로 하드 클리핑 후 측정 (이 repo 의 예전 동작, 대조용) |
+| `wer`, `wer_edits`, `wer_words` | Whisper 자체 영어 정규화기 적용 ← **보고용** |
+| `wer_raw`, `wer_raw_edits`, `wer_raw_words` | 원시 문자열 비교 (`llmtse/eval.py` 와 동일) |
+| `wer_hyp` | Whisper 원본 전사 — 모델 재실행 없이 재계산할 수 있게 남깁니다 |
+
+`_clipped` / `_raw` 컬럼은 **자동으로 따라옵니다**(`--metrics` 에 적을 필요 없음).
+LLM-TSE 실측 영향: `dnsmos_ovrl` 2.55 → **2.91**, micro-WER 0.593 → **0.524**.
+**SI-SDR·SI-SDRi·STOI·ESTOI·PESQ·spk_sim 은 레벨과 무관**하므로(실측 차이 < 1e-5) 값이
+바뀌지 않습니다. 자세한 근거는 [CAVEATS.md §1-6 · §1-7](CAVEATS.md) 를 보세요.
+
+> ⚠️ **추론 산출물은 반드시 float32 WAV 로 저장하세요.** `torchaudio.save` 와 `sf.write` 는
+> 기본이 PCM_16 이고 ±1 밖을 **조용히 클리핑**합니다. TSE 모델 출력은 ±1 을 넘는 것이
+> 정상이며(LLM-TSE 는 100% 모든 행이 초과, max peak 17.25), 클리핑되면 SI-SDR 이 평균
+> **4.7 dB** 손실됩니다. → [CAVEATS.md §1-8](CAVEATS.md)
 
 ### ⏱️ 예상 소요 시간 (5,000행 × 3시스템 = 15,000 utt)
 

@@ -83,6 +83,113 @@ CUDA EP 와 CPU EP 의 DNSMOS 값은 부동소수점 커널 차이로 **최대 �
 - **대응(적용됨)**: 실제 사용된 EP 가 `<output>_config.json` 의 `dnsmos.actual_providers` 에
   기록됩니다. 세 sidecar 를 비교해 같은지 확인하세요.
 
+### 1-6. 🔴 모델 출력이 ±1 을 넘으면 DNSMOS 가 **클리핑된 신호**를 채점합니다
+
+이 프로젝트에서 가장 비쌌던 버그입니다. 에러도 `nan` 도 없이 **그럴듯하지만 틀린 숫자**가
+나왔고, SI-SDR 15.79 dB · PESQ 4.02 인데 WER 61.5% 라는 모순을 추적해야 드러났습니다.
+
+`speechmos` 는 ±1 범위를 벗어난 입력을 `ValueError: np.ndarray values must be between -1
+and 1.` 로 거부합니다. 예전 `metrics.dnsmos()` 는 그 제약을 `np.clip(x, -1, 1)` 로
+만족시켰는데, TSE 모델 출력은 흔히 1.0 을 넘습니다 — **LLM-TSE 베이스라인은 300행 전수
+확인 결과 100% 모든 행이 peak > 1.0** 이고(median 4.94, max 17.25), 정답보다 rms **+24.1 dB**
+큽니다. 그 결과 median 행의 샘플 **5.5%**(최악 40.3%)가 잘린 채 채점됐습니다.
+
+실측 (50행, 정답을 기준점으로 함께 측정):
+
+| 조건 | sig | bak | ovrl | p808 | peak | rms dBFS |
+|---|--:|--:|--:|--:|--:|--:|
+| 예측, 하드 클리핑 (예전) | 3.153 | 3.208 | **2.550** | 3.173 | 1.000 | −8.1 |
+| 예측, peak → 0.95 | 3.346 | 3.517 | 2.847 | 3.494 | 0.950 | −20.2 |
+| **예측, rms → −26 dBov** | 3.388 | 3.611 | **2.912** | 3.494 | 0.514 | −26.0 |
+| 정답, 원본 그대로 | 3.561 | 4.064 | **3.273** | 3.807 | 0.299 | −30.3 |
+| 정답, rms → −26 dBov | 3.559 | 4.042 | **3.273** | 3.807 | 0.502 | −26.0 |
+
+- **대응(적용됨)**: `metrics.dnsmos_normalize()` 가 rms 를 **−26 dBov**(ITU-T P.56)로
+  맞춥니다. **클리핑이 아니라 스케일링**입니다. crest factor 가 31.7 dB 까지 가므로
+  −26 dBov 후에도 **약 2%(8/400)** 는 peak 가 1.0 을 넘어, 그 경우 peak 0.99 로 한 번 더
+  축소합니다(레벨을 조금 희생하지만 파형은 온전).
+  −26 dBov 를 고른 이유는 **정답을 같은 방식으로 채점해도 3.273 으로 원본과 동일**해
+  기준점이 흔들리지 않기 때문입니다(peak→0.95 는 3.273→3.211 로 움직임).
+- 예전 방식 값은 `dnsmos_*_clipped` 컬럼으로 **함께 기록**되므로 과거 숫자와 대조 가능합니다.
+  `_raw` 가 아니라 `_clipped` 인 이유: speechmos 가 ±1 초과를 거부하므로 "정규화하지 않은
+  진짜 원시값" 은 애초에 계산할 수 없습니다. 그 값은 정규화를 안 한 게 아니라 **가장 많이
+  변형된** 값입니다.
+- **확인법**: `dnsmos_ovrl` 과 `dnsmos_ovrl_clipped` 가 같으면 정규화가 안 걸렸거나 예측이
+  이미 ±1 안에 있다는 뜻입니다. `scripts/eval_llmtse.sh` 가 매 런마다 이 차이를 출력합니다.
+
+**레벨에 영향받지 않는 지표** (예측을 정답 레벨로 맞춰 재계산한 실측 차이):
+
+```
+si_sdr / si_sdri / input_si_sdr / input_si_sdr_pairwise   -0.00000   정의상 스케일 불변
+stoi / estoi                                              +0.00000   pystoi 내부 정규화
+pesq                                                      -0.00001   P.862 내부 레벨 정렬
+spk_sim                                                   +0.00001   ECAPA mean-var norm + 코사인
+```
+
+→ **이 9개 컬럼은 레벨과 무관하므로 기존 값이 그대로 유효합니다.** 영향은 DNSMOS 4개뿐입니다.
+
+### 1-7. 🔴 WER 에 텍스트 정규화가 없으면 대소문자·구두점이 오류로 계산됩니다
+
+Whisper 는 같은 모델로도 행에 따라 구두점을 붙이기도 하고 안 붙이기도 합니다. 정규화 없이
+비교하면 **모든 단어가 맞아도** 오류가 쌓입니다:
+
+```
+REF: Although plump and healthy, Josiana was, we repeat, a perfect prude.
+HYP: although plump and healthy josianna was we repeat a perfect prude
+→ 원시 0.5455 (6 edits/11) · 정규화 0.0909 (1 edit)
+   ★ 이 행의 SI-SDR 은 50.75 dB — 거의 완벽한 복원입니다.
+```
+
+LLM-TSE 5,000행 corpus micro-WER: **0.5932 → 0.5240** (약 7 pp).
+
+- **대응(적용됨)**: Whisper 체크포인트 자신의 정규화기(`tokenizer.normalize` — 대소문자·
+  구두점·숫자·축약형 + 철자 변형 1,740개)를 씁니다. 이미 로드하는 프로세서에서 나오므로
+  **추가 의존성·추가 다운로드가 0** 입니다.
+- 원시값은 `wer_raw` / `wer_raw_edits` / `wer_raw_words` 로 **함께 기록**됩니다.
+  ⚠️ `llmtse/eval.py:43-45` 도 정규화를 하지 않으므로, 베이스라인 발표 수치와 직접
+  대조할 때는 `wer_raw` 를 쓰세요.
+- `wer_hyp` 에 Whisper 원본 출력이 남아 있어 **모델을 다시 돌리지 않고** 다른 정규화로
+  재계산할 수 있습니다(5,000행 2시간 절약).
+- 두 컬럼 모두 **corpus micro-WER**(총 edits / 총 words)로 집계합니다. 한쪽만 micro 로 하면
+  정규화 효과와 집계 방식 차이가 섞여 비교가 무의미해집니다.
+
+### 1-8. 🔴 `torchaudio.save` · `sf.write` 의 기본 형식은 PCM_16 이고 **조용히 클리핑**합니다
+
+`encoding` / `subtype` 을 지정하지 않으면 float32 텐서를 넘겨도 **PCM_16 으로 저장되며
+±1.0 밖이 잘립니다.** 경고도 없습니다. 실측:
+
+```
+torchaudio.save(path, wav.float(), sr)                  → PCM_16, peak 10.164 → 1.000  ★ 클리핑
+torchaudio.save(..., encoding="PCM_F", bits_per_sample=32) → FLOAT,  peak 10.164 보존
+sf.write(path, x, sr)                                   → PCM_16                       ★ 클리핑
+sf.write(path, x, sr, subtype="FLOAT")                  → FLOAT   보존
+```
+
+TSE 모델 출력은 ±1 을 넘는 것이 정상이므로 이는 **DNSMOS만의 문제가 아니라 SI-SDR 을
+망가뜨립니다.** LLM-TSE 예측 200행으로 시뮬레이션한 피해:
+
+```
+                FLOAT       PCM_16      차이
+SI-SDR 평균      7.429       2.706    -4.723 dB
+SI-SDR 중앙값    7.132       4.786    -2.346 dB
+ESTOI 평균      0.7883      0.7115    -0.0768
+악화폭 분위: 50%=2.4dB  75%=5.0dB  90%=9.6dB  99%=40.8dB
+```
+
+세 프로젝트 현황 — **모두 float32 로 통일되어야 합니다**:
+
+| | 저장 코드 | 상태 |
+|---|---|---|
+| llmtse | `sf.write(..., subtype="FLOAT")` | ✓ 처음부터 올바름 |
+| styletse | `torchaudio.save(..., encoding="PCM_F", bits_per_sample=32)` | ✓ 처음부터 올바름 |
+| tpex | `torchaudio.save(path, wav...float(), sr)` | ✗ → **수정함** (`scripts/inference.py:_save_wav`, `pa_vocoder/scripts/inference.py`) |
+
+- **확인법**: `python -c "import soundfile as sf; print(sf.info('pred.wav').subtype)"` →
+  `FLOAT` 이어야 합니다. `PCM_16` 이면 그 산출물은 다시 뽑아야 합니다.
+- 정답(`target`/`mixed`)이 PCM_16 인 것은 **무해합니다**: rms 0.028 에서 양자화 SNR 이
+  70.1 dB 라, 이 데이터의 최대 측정값 50.9 dB 보다 19 dB 위입니다. 예측을 FLOAT 으로
+  두는 이유는 정답과 형식을 맞추기 위해서가 아니라 **모델 출력이 ±1 을 넘기 때문**입니다.
+
 ---
 
 ## 2. 샘플레이트 규약
@@ -189,6 +296,42 @@ asteroid 는 무음 reference 에도 유한한 바닥값을 냅니다. 이 repo 
 `min(len(est), len(ref), len(mix))` 로 세 신호를 함께 자릅니다(형제 프로젝트 규약).
 asteroid 는 길이 불일치를 예외로 처리하지만 이 repo 는 자릅니다. 큰 차이가 나면 정렬 문제이니
 원본을 확인하세요.
+
+### 3-6. overlap 0.0 의 SI-SDR 50 dB 는 "분리 성능" 이 아니라 "복사 정확도" 입니다
+
+LLM-TSE `best` 에서 SI-SDR 최댓값이 **50.77 dB** 였고 51 dB 초과는 0행이었습니다.
+정상적인 측정값이지만 **분리 성능으로 읽으면 안 됩니다.**
+
+먼저 측정 자체는 확실합니다:
+
+- **eps 포화가 아닙니다**: `E(e_noise)=0.554` vs `eps=1e-8` — 7자리 차이. eps 없는 참값과
+  적용값이 소수 3자리까지 같고, eps 가 만드는 천장은 128 dB 입니다.
+- **독립 구현 3종이 일치합니다**: CSV / native / `pb_bss_eval` 직접 / `asteroid.get_metrics`
+  네 경로가 `50.7674` 로 동일(최대차 8.6e-06).
+
+문제는 해석입니다. overlap 0.0 은 두 화자가 **다른 시간대**에 말하므로, target 이 말하는
+구간에는 방해음이 아예 없습니다. 120행 검증:
+
+```
+overlap 0.0, target 구간 안에서의 SI-SDR
+  혼합 vs 정답 : median 102.7 dB · 120/120 행이 90 dB 초과   ← PCM_16 양자화 수준 = 비트 단위로 동일
+  예측 vs 정답 : median  47.1 dB · max 50.9 dB
+비교) overlap 1.0 의 혼합 vs 정답 (target 구간): median 0.1 dB  ← 여기선 진짜로 섞여 있음
+```
+
+즉 그 구간에서 모델이 할 일은 분리가 아니라 **그대로 통과시키기**뿐이고, 50.9 dB 는 이 모델의
+통과 충실도입니다. 오차의 99.3% 도 target 구간에 있고 무음 구간 제거는 72 dB 로 거의 완벽합니다.
+
+- **보고 시 권장**: overlap 별로 분해해 보여주세요. 전체 평균 하나로는 overlap 0.0 의
+  통과 성능이 진짜 분리 성능을 가립니다(LLM-TSE 는 15.79 dB vs 나머지 4~7 dB).
+- **반대쪽 −80.00 dB 바닥은 진짜 artifact 입니다**: 6행이 `pb_bss_eval` 의 eps 바닥에 걸려
+  있고(정답과 상관계수 ~1e-6 = 완전 무상관), 전체 평균을 0.105 dB 끌어내립니다. 평균 7.004 vs
+  중앙값 6.298 이므로 **중앙값을 함께 보고**하는 편이 정직합니다.
+- **WER 이 overlap 과 반대 방향인 이유도 여기 있습니다**: overlap 0.0 에서 잔여 누설이
+  target 대비 26 dB 아래라도, 무음 구간에 놓인 −26 dB 음성은 Whisper 가 또렷하게 전사합니다
+  (log-mel 동적 범위 80 dB + 입력 정규화). 그래서 삽입 오류가 폭증합니다:
+  삽입률 0.240(ov 0.0) → 0.048(ov 1.0), hyp/ref 단어 비율 1.045 → 0.795.
+  **SI-SDR 과 WER 이 서로 다른 실패를 재고 있고 둘 다 맞습니다.**
 
 ---
 

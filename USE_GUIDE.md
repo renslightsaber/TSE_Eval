@@ -198,10 +198,28 @@ python -m tse_eval -i preds.csv -o out.csv --metrics si_sdr,si_sdri,pesq -s none
 
 ```
 file_id, estimate, reference, mixture, overlap,   ← 입력 그대로
-si_sdr, si_sdri, stoi, estoi, pesq,
+si_sdr, si_sdri, input_si_sdr, input_si_sdr_pairwise, stoi, estoi, pesq,
 dnsmos_sig, dnsmos_bak, dnsmos_ovrl, dnsmos_p808,
+dnsmos_sig_clipped, dnsmos_bak_clipped,           ← 동반 컬럼(자동)
+dnsmos_ovrl_clipped, dnsmos_p808_clipped,
+wer, wer_edits, wer_words,                        ← wer 요청 시
+wer_raw, wer_raw_edits, wer_raw_words, wer_hyp,   ← 동반 컬럼(자동)
+spk_sim,
 error                                             ← 실패 시 원인 문자열(정상은 빈칸)
 ```
+
+**동반 컬럼(companion)** — `--metrics` 에 적지 않아도 자동으로 따라옵니다. 같은 ONNX 세션·
+같은 Whisper 패스에서 나오므로 추가 비용이 거의 없고, **정규화 방식에 결론이 의존하지 않음을
+보이려면 두 값이 다 필요**하기 때문입니다.
+
+| 동반 컬럼 | 무엇이 다른가 |
+|---|---|
+| `dnsmos_*_clipped` | 입력을 ±1 로 하드 클리핑 (이 repo 의 예전 동작). 정규화 컬럼은 rms −26 dBov |
+| `wer_raw*` | 원시 문자열 비교. `wer` 는 Whisper 자체 정규화기 적용 |
+
+`_raw` 가 아니라 `_clipped` 인 이유: `speechmos` 가 ±1 초과를 거부하므로 "정규화하지 않은
+진짜 원시 DNSMOS" 는 계산 자체가 불가능합니다. 그 값은 정규화를 안 한 게 아니라 **가장 많이
+변형된** 값입니다. 반면 `wer_raw` 는 진짜로 원시 텍스트라 이름이 정확합니다.
 
 - 특정 지표 계산이 실패하면 그 값만 `nan`, 나머지는 정상입니다.
 - 파일을 못 읽는 등 **행 전체가 실패**하면 지표는 모두 `nan`, `error` 에 원인이 기록되고 **파이프라인은 멈추지 않습니다**.
@@ -344,7 +362,16 @@ python scripts/download_models.py --only wer        # Whisper 만
 - WER 참조 텍스트는 매니페스트의 `target_sentence` 열입니다.
   **StyleTSE 매니페스트에는 이 열이 없어** 그 행들은 `nan` 이 되고 micro 집계에서 제외됩니다.
   `--source-csv` 로 PORTE-v3 를 join 하면 열을 가져올 수 있습니다.
-- 행별 출력에 `wer_hyp`(Whisper 전사 결과) 열이 함께 남아 오류를 눈으로 확인할 수 있습니다.
+- 행별 출력에 `wer_hyp`(Whisper 전사 결과) 열이 함께 남아 오류를 눈으로 확인할 수 있고,
+  **모델을 다시 돌리지 않고** 다른 정규화로 재계산할 수도 있습니다(5,000행에 약 2시간 절약).
+- **텍스트 정규화**: `wer` 는 Whisper 체크포인트 자신의 영어 정규화기(대소문자·구두점·숫자·
+  축약형 + 철자 변형 1,740개)를 적용합니다. 없으면 내용이 전부 맞아도 오류가 쌓입니다 —
+  실측 0.5932 → 0.5240. `llmtse/eval.py` 는 정규화를 하지 않으므로 그쪽 발표 수치와
+  대조할 때는 `wer_raw` 를 쓰세요. 두 컬럼 모두 **corpus micro-WER** 로 집계합니다.
+- **DNSMOS 레벨 정규화**: rms 를 −26 dBov 로 맞춘 뒤 측정합니다. DNSMOS 는 무참조 회귀
+  모델이라 레벨에 민감하고, `speechmos` 는 ±1 초과를 거부합니다. TSE 모델 출력은 ±1 을
+  넘는 것이 정상이므로(LLM-TSE 는 100% 초과) 이 정규화가 없으면 클리핑된 신호를 채점하게
+  됩니다 — 실측 `dnsmos_ovrl` 2.55 → 2.91. → [CAVEATS.md §1-6](CAVEATS.md)
 
 모델 id 등은 [`configs/config.yaml`](configs/config.yaml) 에서 바꿀 수 있고,
 실제 사용된 값은 `<output>_config.json` 에 기록됩니다.
