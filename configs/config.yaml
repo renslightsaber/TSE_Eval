@@ -86,17 +86,62 @@ metrics:
 #   system in a comparison must use the same providers. The run's sidecar records
 #   both what was requested and what onnxruntime actually used, so a mismatch is
 #   detectable afterwards. Use `--dnsmos-providers cpu` to force CPU.
+#
+# ★★ LEVEL NORMALISATION — the one setting that silently rewrote our numbers.
+#   DNSMOS is a no-reference regressor trained on conventionally-levelled speech,
+#   so it is level-sensitive, and `speechmos` refuses input outside [-1, 1].
+#   This project used to satisfy that with a hard clip, which meant DNSMOS scored
+#   a *clipped* waveform whenever a model ran hot. LLM-TSE's output exceeds ±1 on
+#   100 % of rows (median peak 4.94, max 17.25; rms +24 dB vs the reference), so
+#   the median row had 5.5 % of its samples clipped — worst case 40.3 %.
+#
+#   Measured on 50 real rows, with the clean reference as an anchor:
+#       condition                    sig    bak   ovrl   p808     peak   rms dBFS
+#       pred, hard-clipped (old)    3.153  3.208  2.550  3.173    1.000     -8.1
+#       pred, peak -> 0.95          3.346  3.517  2.847  3.494    0.950    -20.2
+#       pred, rms -> -26 dBov       3.388  3.611  2.912  3.494    0.514    -26.0   <- default
+#       reference, untouched        3.561  4.064  3.273  3.807    0.299    -30.3
+#       reference, rms -> -26 dBov  3.559  4.042  3.273  3.807    0.502    -26.0
+#
+#   -26 dBov (ITU-T P.56) is the default because it leaves the clean reference's
+#   score untouched (3.273 either way), so the anchor does not move. peak->0.95
+#   shifts it to 3.211: a single short spike captures the peak and shrinks
+#   everything else. Crest factor here reaches 31.7 dB, so ~2 % of files still
+#   exceed ±1 after -26 dBov; those are scaled once more to peak 0.99 — scaled,
+#   never clipped.
+#
+#   ★ EVERY system in a comparison must use the same normalisation, exactly as
+#     with providers. `dnsmos_*_clipped` columns reproduce the old clipped
+#     behaviour alongside the reported values, so nothing is lost and the two can
+#     be compared directly. Unaffected by level (measured, difference < 1e-5):
+#     SI-SDR family, STOI, ESTOI, PESQ, spk_sim — their published values stand.
 dnsmos:
   intra_op_threads: 4
   providers: [CUDAExecutionProvider, CPUExecutionProvider]
+  normalize: rms_-26dbov     # scale to -26 dBov RMS, guard peak at 0.99
 
 # WER: Whisper transcription of the estimate vs the manifest's target_sentence.
 # This is the same model LLM-TSE's eval.py uses, so the numbers are comparable.
 # Summary aggregation is corpus micro-WER (total edits / total words), not the
 # mean of per-row WER — that is the figure reported in TSE/ASR papers.
+#
+# ★ TEXT NORMALISATION. Comparing raw strings charges edits for case and
+#   punctuation, which Whisper emits inconsistently from row to row:
+#       REF: Although plump and healthy, Josiana was, we repeat, a perfect prude.
+#       HYP: although plump and healthy josianna was we repeat a perfect prude
+#       raw 0.5455 (6 edits/11) vs normalised 0.0909 (1 edit) — on a row whose
+#       SI-SDR is 50.75 dB, i.e. an almost perfect reconstruction.
+#   Over 5,000 LLM-TSE rows, corpus micro-WER falls 0.5932 -> 0.5240.
+#
+#   `whisper_english` uses the checkpoint's own normaliser (case, punctuation,
+#   numbers, contractions, 1,740 spelling variants) via the tokenizer we already
+#   load — no extra dependency or download. `wer_raw` keeps the unnormalised
+#   figure, which is what llmtse/eval.py:43-45 computes, so the baseline's
+#   published numbers stay reconcilable.
 wer:
   model_id: openai/whisper-large-v3
   language: en
+  normalize: whisper_english
 
 # Speaker Similarity: cosine of ECAPA embeddings, estimate vs reference.
 # ECAPA is 16 kHz-only and does NOT resample its input — a 24 kHz waveform

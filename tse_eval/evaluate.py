@@ -22,7 +22,7 @@ import pandas as pd
 
 from .audio import load_wav
 from .metrics import (DEFAULT_METRICS, METRIC_COLUMNS, _DNSMOS_COLUMNS,
-                      compute_row_metrics, micro_wer)
+                      compute_row_metrics, expand_companions, micro_wer)
 from .ort_setup import (DEFAULT_INTRA_OP_THREADS, configure_onnxruntime,
                         provenance as ort_provenance)
 
@@ -254,7 +254,8 @@ def evaluate_csv(
     # DNSMOS runs through onnxruntime, and speechmos creates its sessions with no
     # options at all — bound the thread pool and pick providers before the first
     # session exists. Only when a DNSMOS column was actually requested.
-    want = set(DEFAULT_METRICS) if metrics is None else set(metrics)
+    want = expand_companions(
+        set(DEFAULT_METRICS) if metrics is None else set(metrics))
     if want & _DNSMOS_COLUMNS:
         configure_onnxruntime(threads=dnsmos_threads, providers=dnsmos_providers)
 
@@ -344,17 +345,27 @@ def _safe_nanmean(values: np.ndarray) -> float:
     return float(vals.mean()) if vals.size else float("nan")
 
 
+# WER columns aggregate as corpus micro-WER, not as a mean. Both the normalised
+# and the raw variant need it: mixing a micro figure with a macro one would make
+# the two columns silently incomparable.
+_MICRO_WER_COUNTS = {
+    "wer":     ("wer_edits", "wer_words"),
+    "wer_raw": ("wer_raw_edits", "wer_raw_words"),
+}
+
+
 def _aggregate_metric(metric: str, sub: pd.DataFrame) -> float:
     """Aggregate one metric over one group.
 
-    Everything is a NaN-safe mean except ``wer``, which must be **corpus
+    Everything is a NaN-safe mean except the WER columns, which must be **corpus
     micro-WER** (total edits / total reference words). Averaging per-row WER
     over-weights short utterances and yields a different number, so the paper
     table uses the micro figure — see :func:`tse_eval.metrics.micro_wer`.
     """
-    if metric == "wer" and {"wer_edits", "wer_words"} <= set(sub.columns):
-        return micro_wer(sub["wer_edits"].to_numpy(dtype=float),
-                         sub["wer_words"].to_numpy(dtype=float))
+    counts = _MICRO_WER_COUNTS.get(metric)
+    if counts and set(counts) <= set(sub.columns):
+        return micro_wer(sub[counts[0]].to_numpy(dtype=float),
+                         sub[counts[1]].to_numpy(dtype=float))
     return _safe_nanmean(sub[metric].to_numpy(dtype=float))
 
 

@@ -15,7 +15,8 @@ import os
 import pytest
 
 from tse_eval.config import DEFAULT_CONFIG_PATH, DEFAULTS, load_config
-from tse_eval.metrics import METRIC_COLUMNS, MODEL_BACKED_METRICS
+from tse_eval.metrics import (COMPANION_METRICS, METRIC_COLUMNS,
+                              MODEL_BACKED_METRICS)
 from tse_eval.ort_setup import (CPU_ONLY_PROVIDERS, DEFAULT_INTRA_OP_THREADS,
                                 DEFAULT_PROVIDERS, provenance, resolve_providers)
 
@@ -41,11 +42,31 @@ def test_shipped_config_metric_set_is_exactly_what_we_expect():
     metrics = load_config(DEFAULT_CONFIG_PATH)["metrics"]
     assert "spk_sim" in metrics
     assert "wer" not in metrics
-    # Everything that is not model-backed should be present.
+    # Everything that is not model-backed should be present — except companions,
+    # which are emitted automatically alongside their primary metric and so are
+    # deliberately absent from the policy file (listing them would imply they
+    # could be requested independently, which is not how they work).
+    companions = set().union(*COMPANION_METRICS.values())
     for m in METRIC_COLUMNS:
-        if m not in MODEL_BACKED_METRICS:
+        if m not in MODEL_BACKED_METRICS and m not in companions:
             assert m in metrics, f"{m} dropped out of the default metric set"
+    for c in companions:
+        assert c not in metrics, (
+            f"{c} is a companion column; it should not be listed in the config")
     assert len(set(metrics)) == len(metrics), "duplicate entries in metrics"
+
+
+def test_shipped_config_pins_the_normalisation_policy():
+    """DNSMOS level and WER text normalisation must stay declared.
+
+    Both were silent bugs once: DNSMOS scored a hard-clipped waveform and WER
+    compared unnormalised strings, and neither produced an error or a NaN. The
+    policy is now part of the config so a change to it is a visible change.
+    """
+    cfg = load_config(DEFAULT_CONFIG_PATH)
+    assert cfg["dnsmos"]["normalize"] == "rms_-26dbov", (
+        "DNSMOS is level-sensitive; every system in a comparison must share this")
+    assert cfg["wer"]["normalize"] == "whisper_english"
 
 
 def test_shipped_config_pins_dnsmos_acceleration():

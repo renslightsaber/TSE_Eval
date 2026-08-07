@@ -192,12 +192,17 @@ def test_trimmed_baseline_matches_a_manual_trim():
 # Metric set defaults
 # ─────────────────────────────────────────────────────────────────────────
 def test_model_backed_metrics_are_off_by_default():
-    """A plain run must not need Whisper (3 GB) or ECAPA."""
-    assert MODEL_BACKED_METRICS == {"wer", "spk_sim"}
+    """A plain run must not need Whisper (3 GB) or ECAPA.
+
+    ``wer_raw`` is model-backed too: it is a companion of ``wer`` and comes from
+    the very same Whisper pass, so it must not sneak into the default set either.
+    """
+    assert MODEL_BACKED_METRICS == {"wer", "wer_raw", "spk_sim"}
     assert not (set(DEFAULT_METRICS) & MODEL_BACKED_METRICS)
     est, ref, mix = _triple()
     row = compute_row_metrics(est, ref, mix, 16_000)      # metrics=None
-    assert math.isnan(row["wer"]) and math.isnan(row["spk_sim"])
+    for key in ("wer", "wer_raw", "spk_sim"):
+        assert math.isnan(row[key])
 
 
 def test_input_si_sdr_columns_exist_in_the_schema():
@@ -241,6 +246,32 @@ def test_summary_aggregates_wer_as_micro_not_mean():
     summary = summarize(df, "axis_col")
     row = summary[summary["group"] == "a"].iloc[0]
     assert row["wer"] == pytest.approx(6 / 105)          # micro, not 0.505
+
+
+def test_summary_aggregates_wer_raw_as_micro_too():
+    """Both WER columns must use the same aggregation.
+
+    If ``wer`` were micro and ``wer_raw`` a plain mean, the pair would differ by
+    the aggregation as well as the normalisation — and the whole reason for
+    keeping both is to isolate the effect of normalisation alone.
+    """
+    df = pd.DataFrame({
+        "axis_col": ["a", "a"],
+        "wer": [0.01, 1.0], "wer_edits": [1.0, 5.0], "wer_words": [100.0, 5.0],
+        "wer_raw": [0.02, 1.0], "wer_raw_edits": [2.0, 5.0],
+        "wer_raw_words": [100.0, 5.0],
+    })
+    row = summarize(df, "axis_col")
+    row = row[row["group"] == "a"].iloc[0]
+    assert row["wer"] == pytest.approx(6 / 105)
+    assert row["wer_raw"] == pytest.approx(7 / 105)      # micro, not 0.51
+
+
+def test_wer_columns_carry_their_own_counts():
+    """Each WER variant needs its own edit/word counts to aggregate as micro."""
+    from tse_eval.metrics import WER_SUPPORT_COLUMNS
+    for c in ("wer_edits", "wer_words", "wer_raw_edits", "wer_raw_words", "wer_hyp"):
+        assert c in WER_SUPPORT_COLUMNS
 
 
 # ─────────────────────────────────────────────────────────────────────────

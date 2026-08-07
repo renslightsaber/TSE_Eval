@@ -16,7 +16,7 @@ from typing import Optional
 
 from .backends import available_backends
 from .config import load_config, write_sidecar
-from .metrics import METRIC_COLUMNS, configure_models
+from .metrics import METRIC_COLUMNS, configure_models, expand_companions
 from .ort_setup import DEFAULT_INTRA_OP_THREADS
 from .evaluate import evaluate_csv
 
@@ -177,17 +177,32 @@ def main(argv: Optional[list] = None) -> int:
     # Provenance sidecar — the file to cite in the paper.
     base, _ = os.path.splitext(args.output)
     sidecar_path = f"{base}_config.json"
+
+    # ``info["dnsmos"]`` is the runtime onnxruntime provenance (which EP actually
+    # ran). Fold the *policy* keys in too — above all ``normalize``, which changes
+    # the reported MOS by ~0.34 and must match across the systems being compared.
+    dnsmos_record = dict(info.get("dnsmos") or {})
+    for key in ("normalize",):
+        if key in (cfg.get("dnsmos") or {}):
+            dnsmos_record[key] = cfg["dnsmos"][key]
+
+    # Record the metrics that were actually computed, companions included — a
+    # sidecar that lists only what was asked for would not describe the CSV.
+    computed = sorted(expand_companions(set(metrics))) if metrics else []
+
     write_sidecar(sidecar_path, {
         "input_csv": os.path.abspath(args.input),
         "output_csv": os.path.abspath(args.output),
         "model_name": args.model_name,
         "target_sr": target_sr,
         "si_sdr_backend": backend,
-        "metrics": sorted(metrics) if metrics else [],
+        "metrics": computed,
+        "metrics_requested": sorted(metrics) if metrics else [],
         "config_file": cfg.get("_config_path"),
         "wer": cfg.get("wer"),
         "spk_sim": cfg.get("spk_sim"),
         **info,
+        "dnsmos": dnsmos_record,
     })
     print(f"[tse-eval] wrote run config   → {sidecar_path}")
 

@@ -35,10 +35,16 @@ DEFAULTS: Dict[str, Any] = {
     "target_sr": 24_000,
     "si_sdr_backend": "native",
     "metrics": list(DEFAULT_METRICS),
-    "wer": {"model_id": WER_MODEL_ID, "language": WER_LANGUAGE},
+    # ``normalize`` is descriptive, not a switch: the implementation lives in
+    # metrics.dnsmos_normalize / metrics.wer. It is recorded here (and therefore
+    # in every run's sidecar) because both normalisations change the reported
+    # numbers and every system in a comparison must share them.
+    "wer": {"model_id": WER_MODEL_ID, "language": WER_LANGUAGE,
+            "normalize": "whisper_english"},
     "spk_sim": {"model_id": SPK_SIM_MODEL_ID},
     "dnsmos": {"intra_op_threads": DEFAULT_INTRA_OP_THREADS,
-               "providers": list(DEFAULT_PROVIDERS)},
+               "providers": list(DEFAULT_PROVIDERS),
+               "normalize": "rms_-26dbov"},
 }
 
 

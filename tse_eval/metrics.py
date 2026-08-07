@@ -66,9 +66,13 @@ PERCEPTUAL_SR = 16_000
 _EPS = 1e-8
 
 # The DNSMOS output columns, as one set — used by the resample guard in
-# ``compute_row_metrics``. Kept in sync with the keys returned by :func:`dnsmos`.
+# ``compute_row_metrics`` and by the onnxruntime setup trigger in
+# ``evaluate.evaluate_csv``. Kept in sync with the keys returned by
+# :func:`dnsmos`, including the ``_clipped`` companions: asking for only those
+# still needs an ONNX session.
 _DNSMOS_COLUMNS = frozenset(
-    {"dnsmos_sig", "dnsmos_bak", "dnsmos_ovrl", "dnsmos_p808"})
+    {f"dnsmos_{n}{sfx}" for n in ("sig", "bak", "ovrl", "p808")
+     for sfx in ("", "_clipped")})
 
 # Metric column order used by the output CSV.
 METRIC_COLUMNS = [
@@ -85,7 +89,41 @@ METRIC_COLUMNS = [
     "dnsmos_p808",
     "wer",
     "spk_sim",
+    # ── Companion columns (see COMPANION_METRICS) ────────────────────────────
+    # Emitted automatically alongside their primary metric, so `--metrics` never
+    # has to name them. They are listed here so ``summarize`` reports them too:
+    # showing both variants is what demonstrates that a conclusion does not rest
+    # on the normalisation choice.
+    "dnsmos_sig_clipped",
+    "dnsmos_bak_clipped",
+    "dnsmos_ovrl_clipped",
+    "dnsmos_p808_clipped",
+    "wer_raw",
 ]
+
+# primary metric -> companions it drags along. Same idea as "asking for si_sdri
+# implies its two terms": the pair is only meaningful together.
+COMPANION_METRICS: Dict[str, "frozenset[str]"] = {
+    "dnsmos_sig":  frozenset({"dnsmos_sig_clipped"}),
+    "dnsmos_bak":  frozenset({"dnsmos_bak_clipped"}),
+    "dnsmos_ovrl": frozenset({"dnsmos_ovrl_clipped"}),
+    "dnsmos_p808": frozenset({"dnsmos_p808_clipped"}),
+    "wer":         frozenset({"wer_raw"}),
+}
+
+
+def expand_companions(metrics: "set[str]") -> "set[str]":
+    """Add every companion of every requested metric. Idempotent.
+
+    The companions cost nothing extra to produce — the same Whisper pass and the
+    same ONNX session yield both variants — so requesting one and silently
+    dropping the other would only hide information.
+    """
+    out = set(metrics)
+    for primary, extra in COMPANION_METRICS.items():
+        if primary in out:
+            out |= extra
+    return out
 
 # ── Sample-rate policy, in one place (see module docstring for the reasons) ──
 # "native" = compute at the caller's working rate; an int = resample to that rate.
@@ -104,18 +142,26 @@ METRIC_SR_POLICY: Dict[str, "str | int"] = {
     "dnsmos_p808": PERCEPTUAL_SR,
     "wer": PERCEPTUAL_SR,
     "spk_sim": PERCEPTUAL_SR,
+    "dnsmos_sig_clipped": PERCEPTUAL_SR,
+    "dnsmos_bak_clipped": PERCEPTUAL_SR,
+    "dnsmos_ovrl_clipped": PERCEPTUAL_SR,
+    "dnsmos_p808_clipped": PERCEPTUAL_SR,
+    "wer_raw": PERCEPTUAL_SR,
 }
 
 # Metrics needing a model download; excluded from the default metric set so a
-# plain run stays light. Opt in with ``--metrics``.
-MODEL_BACKED_METRICS = frozenset({"wer", "spk_sim"})
+# plain run stays light. Opt in with ``--metrics``. ``wer_raw`` is here too: it is
+# a companion of ``wer`` and needs the very same Whisper pass.
+MODEL_BACKED_METRICS = frozenset({"wer", "wer_raw", "spk_sim"})
 
 # Default metric set: everything except the model-backed extras.
 DEFAULT_METRICS = [m for m in METRIC_COLUMNS if m not in MODEL_BACKED_METRICS]
 
 # Extra per-row columns that are written alongside the metrics but are not
-# metrics themselves (WER needs them for corpus-level micro aggregation).
-WER_SUPPORT_COLUMNS = ["wer_edits", "wer_words", "wer_hyp"]
+# metrics themselves (WER needs the counts for corpus-level micro aggregation,
+# and ``wer_hyp`` is what makes a WER recomputable without re-running Whisper).
+WER_SUPPORT_COLUMNS = ["wer_edits", "wer_words",
+                       "wer_raw_edits", "wer_raw_words", "wer_hyp"]
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -242,26 +288,79 @@ def stoi_metric(ref: np.ndarray, est: np.ndarray, sr: int = PERCEPTUAL_SR,
 _dnsmos_warned = False
 
 
+DNSMOS_TARGET_DBOV = -26.0      # ITU-T P.56 convention
+_DNSMOS_PEAK_CEILING = 0.99     # speechmos rejects |x| > 1 outright
+
+
+def dnsmos_normalize(x: np.ndarray, dbov: float = DNSMOS_TARGET_DBOV) -> np.ndarray:
+    """Bring a waveform to ``dbov`` RMS, scaling down further if it would clip.
+
+    ★ This is a *scale*, never a clip — that distinction is the whole point.
+    ``speechmos`` refuses input outside [-1, 1] (``ValueError: np.ndarray values
+    must be between -1 and 1.``). An earlier version of this module satisfied
+    that with ``np.clip``, which meant DNSMOS scored a **clipped** waveform
+    whenever a model's output ran hot. Measured on LLM-TSE predictions, whose
+    peaks exceed 1.0 on 100 % of rows (median 4.94, max 17.25): the median row
+    had 5.5 % of its samples clipped (worst 40.3 %), dragging ``dnsmos_ovrl``
+    from 2.91 to 2.55 — a level artefact reported as if it were audio quality.
+
+    RMS normalisation alone is not enough: crest factor here runs to 31.7 dB, so
+    ~2 % of files still peak above 1.0 after hitting -26 dBov. Those get one
+    further proportional reduction to ``_DNSMOS_PEAK_CEILING``. They end up a
+    little quieter than -26 dBov, which costs far less than clipping would.
+
+    DNSMOS is level-sensitive because it is a no-reference regressor trained on
+    conventionally-levelled speech; feeding it a signal 24 dB hot is out of
+    distribution. Every system in a comparison must therefore use the *same*
+    normalisation — see ``configs/config.yaml``.
+    """
+    a = np.asarray(x, dtype=np.float64)
+    rms = float(np.sqrt(np.mean(a * a)))
+    if not np.isfinite(rms) or rms <= 0.0:
+        return a                                    # silent/degenerate: leave alone
+    a = a * (10.0 ** (dbov / 20.0) / rms)
+    peak = float(np.max(np.abs(a)))
+    if peak > _DNSMOS_PEAK_CEILING:
+        a = a * (_DNSMOS_PEAK_CEILING / peak)
+    return a
+
+
 def dnsmos(est16k: np.ndarray) -> Dict[str, float]:
     """DNSMOS (P.835) on the estimate only — no reference needed.
 
-    Returns SIG / BAK / OVRL and the P.808 MOS. Input is clipped to [-1, 1]
-    (speechmos requirement). All ``nan`` if speechmos is unavailable.
+    Returns SIG / BAK / OVRL and the P.808 MOS **twice**:
 
-    A missing dependency is the most common cause of an all-NaN DNSMOS column:
-    ``speechmos`` declares no dependencies of its own yet imports ``librosa``
-    and ``onnxruntime`` at module level. Because this function swallows
-    exceptions by design, that used to look like "DNSMOS just returns NaN".
-    An ``ImportError`` now prints one warning (once) so the cause is visible.
+    * ``dnsmos_*``          — on a level-normalised signal (:func:`dnsmos_normalize`).
+      These are the values to report.
+    * ``dnsmos_*_clipped``  — on the signal hard-clipped to [-1, 1], reproducing
+      this project's pre-fix behaviour so older numbers stay reconcilable.
+
+    Why ``_clipped`` and not ``_raw``: speechmos rejects anything outside
+    [-1, 1], so a genuinely un-normalised DNSMOS value cannot be computed at all.
+    Calling the clipped figure "raw" would suggest it is the untouched
+    measurement when it is in fact the *most* altered one.
+
+    All ``nan`` if speechmos is unavailable. That is the most common cause of an
+    all-NaN DNSMOS column: ``speechmos`` declares no dependencies of its own yet
+    imports ``librosa`` and ``onnxruntime`` at module level. Because this
+    function swallows exceptions by design, that used to look like "DNSMOS just
+    returns NaN"; an ``ImportError`` now prints one warning so the cause shows.
     """
     global _dnsmos_warned
-    keys = {"dnsmos_sig": "sig_mos", "dnsmos_bak": "bak_mos",
-            "dnsmos_ovrl": "ovrl_mos", "dnsmos_p808": "p808_mos"}   # == _DNSMOS_COLUMNS
+    src = {"sig": "sig_mos", "bak": "bak_mos", "ovrl": "ovrl_mos", "p808": "p808_mos"}
+    blank = {f"dnsmos_{n}{sfx}": float("nan")
+             for n in src for sfx in ("", "_clipped")}
     try:
         from speechmos import dnsmos as _dnsmos
-        audio = np.clip(np.asarray(est16k, dtype=np.float32), -1.0, 1.0)
-        res = _dnsmos.run(audio, sr=PERCEPTUAL_SR)
-        return {out_key: float(res[src_key]) for out_key, src_key in keys.items()}
+
+        def score(audio: np.ndarray, suffix: str) -> Dict[str, float]:
+            res = _dnsmos.run(np.asarray(audio, dtype=np.float32), sr=PERCEPTUAL_SR)
+            return {f"dnsmos_{n}{suffix}": float(res[k]) for n, k in src.items()}
+
+        a = np.asarray(est16k, dtype=np.float64)
+        out = score(dnsmos_normalize(a), "")
+        out.update(score(np.clip(a, -1.0, 1.0), "_clipped"))
+        return out
     except ImportError as exc:
         if not _dnsmos_warned:
             _dnsmos_warned = True
@@ -270,9 +369,9 @@ def dnsmos(est16k: np.ndarray) -> Dict[str, float]:
                   f"`librosa` and an onnxruntime build, neither of which it "
                   f"declares. Fix: pip install librosa==0.11.0 "
                   f"'onnxruntime-gpu>=1.19.2,<1.21'", file=sys.stderr, flush=True)
-        return {out_key: float("nan") for out_key in keys}
+        return blank
     except Exception:
-        return {out_key: float("nan") for out_key in keys}
+        return blank
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -314,7 +413,15 @@ def _device() -> str:
 
 
 def _get_asr():
-    """Load Whisper once (bf16 on GPU, fp32 on CPU) and cache it."""
+    """Load Whisper once (bf16 on GPU, fp32 on CPU) and cache it.
+
+    The cache also carries ``normalizer`` — the text normaliser used for the
+    reported WER. It comes from the tokenizer we already load, so it costs no
+    extra dependency and no extra download: the model's own ``normalizer.json``
+    (1 740 spelling variants) ships in the checkpoint. Using Whisper's own
+    normaliser rather than a hand-rolled lowercase/strip-punctuation pass is what
+    makes the number comparable with published ASR results.
+    """
     if "model" not in _asr_cache:
         import torch
         from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor
@@ -322,8 +429,13 @@ def _get_asr():
         dtype = torch.bfloat16 if device == "cuda" else torch.float32
         model = AutoModelForSpeechSeq2Seq.from_pretrained(
             WER_MODEL_ID, torch_dtype=dtype, low_cpu_mem_usage=True).to(device).eval()
-        _asr_cache.update(model=model,
-                          processor=AutoProcessor.from_pretrained(WER_MODEL_ID),
+        processor = AutoProcessor.from_pretrained(WER_MODEL_ID)
+        # ``normalize`` is the English normaliser; ``basic_normalize`` is the
+        # language-agnostic fallback for non-English checkpoints.
+        tk = processor.tokenizer
+        normalizer = getattr(tk, "normalize", None) or getattr(
+            tk, "basic_normalize", None) or (lambda s: str(s).strip().lower())
+        _asr_cache.update(model=model, processor=processor, normalizer=normalizer,
                           device=device, dtype=dtype)
     return _asr_cache
 
@@ -352,17 +464,39 @@ def wer(est16k: np.ndarray, reference_text: "str | None") -> Dict[str, float]:
     Input must already be at 16 kHz (Whisper's feature extractor rejects any
     other rate outright).
 
-    Returns four keys: ``wer`` (this row, for inspection) plus ``wer_edits`` /
-    ``wer_words`` / ``wer_hyp``.  The two counts exist because the paper table
-    reports **corpus micro-WER** — ``sum(edits) / sum(words)`` over the whole
-    set.  Averaging per-row WER instead over-weights short utterances and gives
-    a different number, so the summary aggregates the counts, not the ratios.
+    Scored **twice** against the same transcription:
+
+    * ``wer`` / ``wer_edits`` / ``wer_words``
+      after Whisper's own English text normaliser (case, punctuation, numbers,
+      contractions, 1 740 spelling variants). These are the values to report.
+    * ``wer_raw`` / ``wer_raw_edits`` / ``wer_raw_words``
+      on the strings as-is, reproducing this project's pre-fix behaviour — which
+      is also what ``llmtse/eval.py:43-45`` does, so the baseline's published
+      numbers stay comparable.
+
+    Without normalisation, Whisper emitting a row without punctuation costs edits
+    even when every word is right::
+
+        REF: Although plump and healthy, Josiana was, we repeat, a perfect prude.
+        HYP: although plump and healthy josianna was we repeat a perfect prude
+        -> 6 edits / 11 words = 0.545, on a row whose SI-SDR is 50.75 dB
+
+    Measured over 5 000 LLM-TSE rows, corpus micro-WER falls 0.5932 -> 0.5240.
+
+    ``wer_hyp`` always carries Whisper's untouched output, which is what makes
+    any of this recomputable later without re-running the model.
+
+    The counts exist because the paper table reports **corpus micro-WER**
+    (``sum(edits) / sum(words)``); averaging per-row WER over-weights short
+    utterances and yields a different figure, so the summary aggregates counts.
 
     All ``nan`` (and ``wer_hyp=""``) when there is no reference text or on any
     failure, so such rows drop out of the micro sum.
     """
-    blank = {"wer": float("nan"), "wer_edits": float("nan"),
-             "wer_words": float("nan"), "wer_hyp": ""}
+    blank: Dict[str, float] = {k: float("nan") for k in
+                               ("wer", "wer_edits", "wer_words",
+                                "wer_raw", "wer_raw_edits", "wer_raw_words")}
+    blank["wer_hyp"] = ""
     if not reference_text or not str(reference_text).strip():
         return blank
     try:
@@ -375,11 +509,24 @@ def wer(est16k: np.ndarray, reference_text: "str | None") -> Dict[str, float]:
         with torch.no_grad():
             ids = bundle["model"].generate(feats, language=WER_LANGUAGE)
         hyp = bundle["processor"].batch_decode(ids, skip_special_tokens=True)[0]
-        out = jiwer.process_words(str(reference_text).strip(), hyp.strip())
-        edits = out.substitutions + out.deletions + out.insertions
-        words = out.substitutions + out.deletions + out.hits
-        return {"wer": float(out.wer), "wer_edits": float(edits),
-                "wer_words": float(words), "wer_hyp": hyp.strip()}
+        ref = str(reference_text).strip()
+
+        def score(r: str, h: str, prefix: str) -> Dict[str, float]:
+            # An empty hypothesis is legitimate (silence in, nothing out) and
+            # jiwer handles it; an empty *reference* is not scorable.
+            if not r.strip():
+                return {prefix: float("nan"), f"{prefix}_edits": float("nan"),
+                        f"{prefix}_words": float("nan")}
+            o = jiwer.process_words(r, h)
+            return {prefix: float(o.wer),
+                    f"{prefix}_edits": float(o.substitutions + o.deletions + o.insertions),
+                    f"{prefix}_words": float(o.substitutions + o.deletions + o.hits)}
+
+        norm = bundle["normalizer"]
+        out = score(norm(ref), norm(hyp), "wer")
+        out.update(score(ref, hyp.strip(), "wer_raw"))
+        out["wer_hyp"] = hyp.strip()
+        return out
     except Exception:                                       # noqa: BLE001
         return blank
 
@@ -464,7 +611,8 @@ def compute_row_metrics(
         Dict keyed by :data:`METRIC_COLUMNS`, plus :data:`WER_SUPPORT_COLUMNS`
         when ``wer`` is requested.
     """
-    want = set(DEFAULT_METRICS) if metrics is None else set(metrics)
+    want = expand_companions(
+        set(DEFAULT_METRICS) if metrics is None else set(metrics))
     out: Dict[str, float] = {k: float("nan") for k in METRIC_COLUMNS}
 
     # ★ 3-way length alignment FIRST, so every metric below sees one common
@@ -500,7 +648,8 @@ def compute_row_metrics(
     # Resample est/ref once and reuse. ``mix`` is deliberately never resampled:
     # no 16 kHz metric consumes it.
     want_dnsmos = bool(want & _DNSMOS_COLUMNS)
-    needs_est16 = want_dnsmos or bool(want & {"pesq", "wer", "spk_sim"})
+    want_wer = bool(want & {"wer", "wer_raw"})
+    needs_est16 = want_dnsmos or want_wer or bool(want & {"pesq", "spk_sim"})
     needs_ref16 = bool(want & {"pesq", "spk_sim"})
     if needs_est16:
         est16 = resample_np(est_t, sr, PERCEPTUAL_SR) if sr != PERCEPTUAL_SR else est_t
@@ -513,7 +662,7 @@ def compute_row_metrics(
             out.update(dnsmos(est16))
         if "spk_sim" in want:
             out["spk_sim"] = spk_sim(est16, ref16)
-        if "wer" in want:
+        if want_wer:
             out.update(wer(est16, reference_text))
 
     return out

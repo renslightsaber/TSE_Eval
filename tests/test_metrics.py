@@ -14,9 +14,14 @@ import pytest
 
 from tse_eval.audio import align_pair
 from tse_eval.metrics import (
+    COMPANION_METRICS,
+    DNSMOS_TARGET_DBOV,
     METRIC_COLUMNS,
+    METRIC_SR_POLICY,
     compute_row_metrics,
     dnsmos,
+    dnsmos_normalize,
+    expand_companions,
     pesq_wb,
     si_sdr,
     si_sdri,
@@ -176,6 +181,109 @@ def test_stoi_and_dnsmos_do_not_crash_on_degenerate_input():
     for key in DNSMOS_KEYS:
         assert key in dns
         assert math.isnan(dns[key]) or math.isfinite(dns[key])
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# DNSMOS level normalisation
+#
+# This block is the regression guard for the most expensive bug this project has
+# had: ``dnsmos()`` used to hard-clip its input to [-1, 1] to satisfy speechmos,
+# so any model whose output ran hot was scored on a *clipped* waveform. It threw
+# no error and produced no NaN — just plausible, wrong numbers. On real LLM-TSE
+# predictions (peaks above 1.0 on 100 % of rows) it moved dnsmos_ovrl by 0.36.
+# ─────────────────────────────────────────────────────────────────────────
+DNSMOS_CLIPPED_KEYS = [f"{k}_clipped" for k in DNSMOS_KEYS]
+
+
+def test_dnsmos_normalize_hits_target_level(speech_signal):
+    x = speech_signal(seed=3) * 7.0                 # deliberately hot
+    y = dnsmos_normalize(x)
+    rms_dbov = 20 * math.log10(float(np.sqrt(np.mean(y ** 2))))
+    assert rms_dbov == pytest.approx(DNSMOS_TARGET_DBOV, abs=0.01)
+    assert np.max(np.abs(y)) <= 1.0
+
+
+def test_dnsmos_normalize_guards_peak_on_high_crest_factor():
+    """A spike-dominated signal still exceeds ±1 after -26 dBov RMS.
+
+    Crest factor on real audio here reaches 31.7 dB, so ~2 % of files need this
+    second reduction. Without it speechmos raises and the row silently becomes
+    NaN — the failure mode the whole block exists to prevent.
+    """
+    x = np.zeros(16_000)
+    x[8_000] = 1.0                                   # crest factor ~40 dB
+    x += 1e-3 * np.random.default_rng(0).standard_normal(16_000)
+    y = dnsmos_normalize(x)
+    assert np.max(np.abs(y)) <= 1.0
+    # Level had to be sacrificed to stay in range — that is the intended trade.
+    assert 20 * math.log10(float(np.sqrt(np.mean(y ** 2)))) < DNSMOS_TARGET_DBOV
+
+
+def test_dnsmos_normalize_leaves_silence_alone():
+    z = np.zeros(1_000)
+    assert np.array_equal(dnsmos_normalize(z), z)
+
+
+@pytest.mark.parametrize("gain", [0.1, 1.0, 10.0, 100.0])
+def test_dnsmos_is_level_invariant(speech_signal, gain):
+    """The reported DNSMOS columns must not move when the input is rescaled.
+
+    DNSMOS is a no-reference regressor: a gain change is not a quality change.
+
+    Invariance is near-exact but not bit-exact. Normalisation makes the two calls
+    see waveforms agreeing to ~1e-17 (float64 rounding of the scale factor), and
+    the MOS usually comes out identical — but speechmos casts to float32, so a
+    signal sitting on a rounding boundary can flip a bit that the network then
+    amplifies to ~1e-7. Hence 1e-5: four orders below the two decimals DNSMOS is
+    reported to, and four orders below the ~0.36 shift that dropping
+    normalisation altogether produces. A real regression cannot hide in here.
+    """
+    x = speech_signal(seed=5)
+    base = dnsmos(x)
+    scaled = dnsmos(x * gain)
+    for key in DNSMOS_KEYS:
+        assert scaled[key] == pytest.approx(base[key], abs=1e-5), (
+            f"{key} moved with a gain of {gain} — normalisation is not applied")
+
+
+def test_dnsmos_clipped_columns_are_level_sensitive(speech_signal):
+    """The ``_clipped`` companions must reproduce the old, level-dependent path.
+
+    They exist so pre-fix numbers stay reconcilable, which only works if they
+    still behave the old way. If this ever starts passing the invariance check,
+    the two columns have collapsed into one and the comparison is worthless.
+    """
+    x = speech_signal(seed=5)
+    quiet = dnsmos(x * 0.5)["dnsmos_ovrl_clipped"]
+    hot = dnsmos(x * 20.0)["dnsmos_ovrl_clipped"]
+    assert not math.isclose(quiet, hot, abs_tol=1e-3)
+
+
+def test_dnsmos_returns_both_variants(speech_signal):
+    result = dnsmos(speech_signal(seed=6))
+    for key in DNSMOS_KEYS + DNSMOS_CLIPPED_KEYS:
+        assert key in result
+        assert math.isfinite(result[key])
+        assert 0.5 <= result[key] <= 5.5
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Companion metric expansion
+# ─────────────────────────────────────────────────────────────────────────
+def test_expand_companions_is_idempotent_and_additive():
+    once = expand_companions({"dnsmos_ovrl", "wer"})
+    assert {"dnsmos_ovrl_clipped", "wer_raw"} <= once
+    assert expand_companions(once) == once
+    # A metric with no companion is untouched.
+    assert expand_companions({"si_sdr"}) == {"si_sdr"}
+
+
+def test_every_companion_is_a_known_metric_column():
+    for primary, extras in COMPANION_METRICS.items():
+        assert primary in METRIC_COLUMNS
+        for e in extras:
+            assert e in METRIC_COLUMNS, f"{e} missing from METRIC_COLUMNS"
+            assert e in METRIC_SR_POLICY, f"{e} missing from METRIC_SR_POLICY"
 
 
 # ─────────────────────────────────────────────────────────────────────────
