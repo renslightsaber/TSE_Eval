@@ -21,7 +21,8 @@
 #   bash scripts/eval_llmtse.sh --check-only     # 선행 검사만 (약 10초)
 #   bash scripts/eval_llmtse.sh                  # best → last 순서대로 채점
 #
-#   ONLY=best   bash scripts/eval_llmtse.sh      # 한쪽만
+#   VERSION=v2  bash scripts/eval_llmtse.sh      # 채점할 학습 버전 (기본 v2)
+#   ONLY=best   bash scripts/eval_llmtse.sh      # 한쪽만 (전체 태그 v2_best 도 됨)
 #   FORCE=1     bash scripts/eval_llmtse.sh      # 기존 결과 무시하고 재실행
 #   NICE=15 THREADS=2 bash scripts/eval_llmtse.sh          # 더 많이 양보
 #   DNSMOS_PROVIDERS=cpu bash scripts/eval_llmtse.sh       # GPU 를 학습에 완전히 양보
@@ -31,6 +32,13 @@
 #   <추론디렉터리>/eval/llmtse_<tag>_summary.csv   long-format 다축 요약
 #   <추론디렉터리>/eval/llmtse_<tag>_config.json   provenance sidecar ← 논문에 인용할 파일
 #   <추론디렉터리>/eval/eval.log                   실행 로그 (append)
+#
+# ★ V1 만 명명 규칙이 다릅니다. V1 은 VERSION 이 생기기 전에 채점돼 산출물이
+#   llmtse_best.csv / llmtse_last.csv (버전 접두사 없음)입니다. `VERSION=v1` 로 돌리면
+#   같은 디렉터리에 llmtse_v1_best.csv 가 **새로** 생겨 기존 파일과 공존합니다.
+#   V1 을 그대로 재현하려면 태그를 명시하세요:
+#     RUNS="best|/home/work/my-outputs/llmtse/llmtse_baseline_v1/inference_test.csv" \
+#       bash scripts/eval_llmtse.sh
 # ════════════════════════════════════════════════════════════════════════════
 set -Eeuo pipefail
 
@@ -63,17 +71,35 @@ METRICS="${METRICS:-si_sdr,si_sdri,input_si_sdr,input_si_sdr_pairwise,stoi,estoi
 GROUP_BY="${GROUP_BY:-overlap_ratio,prompt_category,same_gender,first_speak}"
 
 # 채점 대상 — "태그|추론 CSV" 를 순서대로. 출력은 각 CSV 옆 eval/ 에 들어갑니다.
-# RUNS 환경변수(공백/줄바꿈 구분)로 덮어쓸 수 있습니다 — 소규모 스모크 테스트나
-# 세 번째 체크포인트 추가 채점에 사용:
+#
+# 기본값은 VERSION 에서 유도합니다. 추론 산출물의 디렉터리 규약이
+#   <LLMTSE_ROOT>/llmtse_baseline_<VERSION>            ← best
+#   <LLMTSE_ROOT>/llmtse_baseline_<VERSION>_step50000  ← last
+# 로 고정돼 있어, 버전만 바꾸면 v3·v4 도 파일 추가 없이 대응됩니다.
+# 태그에 버전을 넣는 이유: model_name 이 llmtse_v2_best 가 되어, 여러 버전의 요약
+# CSV 를 한 표로 concat 해도 행이 구분됩니다(summary 는 long-format).
+VERSION="${VERSION:-v2}"
+LLMTSE_ROOT="${LLMTSE_ROOT:-/home/work/my-outputs/llmtse}"
+
+# RUNS 환경변수(공백/줄바꿈 구분)로 통째로 덮어쓸 수 있습니다 — 소규모 스모크
+# 테스트, 임의 체크포인트, 또는 위의 V1 레거시 태그 재현에 사용:
 #   RUNS="smoke|/tmp/subset.csv" bash scripts/eval_llmtse.sh
 if [[ -n "${RUNS:-}" ]]; then
   read -r -a RUNS <<< "$RUNS"
 else
   RUNS=(
-    "best|/home/work/my-outputs/llmtse/llmtse_baseline_v1/inference_test.csv"
-    "last|/home/work/my-outputs/llmtse/llmtse_baseline_v1_step50000/inference_test.csv"
+    "${VERSION}_best|$LLMTSE_ROOT/llmtse_baseline_${VERSION}/inference_test.csv"
+    "${VERSION}_last|$LLMTSE_ROOT/llmtse_baseline_${VERSION}_step50000/inference_test.csv"
   )
 fi
+
+# ONLY 매칭 — 전체 태그(v2_best)와 접미사(best) 양쪽을 받습니다.
+# ★ 태그에 버전 접두사가 붙으면서 예전의 정확 비교(`"$ONLY" != "$tag"`)로는
+#   ONLY=best 가 아무것도 잡지 못하고 조용히 끝납니다. 실패가 아니라 "0건 처리"로
+#   보이는 종류의 사고라 접미사 매칭을 둡니다.
+_skip_run() {   # $1 = tag → 건너뛰어야 하면 0(true)
+  [[ -n "$ONLY" && "$ONLY" != "$1" && "$ONLY" != "${1#*_}" ]]
+}
 
 CHECK_ONLY=0
 [[ "${1:-}" == "--check-only" ]] && CHECK_ONLY=1
@@ -249,13 +275,19 @@ export TOKENIZERS_PARALLELISM=false      # whisper 토크나이저의 fork 경�
 # 조금씩 느려지는 것은 감수합니다(DNSMOS 의 GPU 발자국은 ≈0.5 GB 로 작습니다).
 
 head1 "② 채점 시작"
+# 태그 목록은 RUNS 에서 뽑는다 — RUNS 를 1개짜리로 덮어쓴 경우에도 안전해야 하므로
+# ${RUNS[1]} 을 직접 참조하지 않는다(set -u 에서 unbound 로 죽음).
+_tags=(); for _r in "${RUNS[@]}"; do _tags+=("${_r%%|*}"); done
+echo "  버전      : $VERSION        (태그 ${_tags[*]})"
 echo "  백엔드    : $BACKEND        (sidecar 에 기록됩니다)"
 echo "  target_sr : $TARGET_SR"
-echo "  지표      : $(tr ',' ' ' <<< "$METRICS" | wc -w)개"
+echo "  지표      : $(tr ',' ' ' <<< "$METRICS" | wc -w)개 + 동반 5개"
 echo "  축        : $GROUP_BY"
 echo "  양보      : nice $NICE · threads $THREADS"
 [[ -n "$DNSMOS_PROVIDERS" ]] && echo "  DNSMOS EP : $DNSMOS_PROVIDERS (명시)"
-echo "  예상      : ckpt 당 약 110분 (단독 실행 기준. 학습과 동시면 더 걸립니다)"
+# V1 을 이 설정 그대로 완주한 실측치. "단독 실행 기준" 추정을 쓰면 진행이 느려
+# 보일 때 불필요하게 의심하게 되므로 경합 하 실측으로 적는다.
+echo "  예상      : ckpt 당 약 2h 17m (V1 실측, 학습 경합 하)"
 
 TOTAL_START=$SECONDS
 DONE_TAGS=()
@@ -263,7 +295,7 @@ DONE_TAGS=()
 for spec in "${RUNS[@]}"; do
   tag="${spec%%|*}"; in_csv="${spec#*|}"
 
-  if [[ -n "$ONLY" && "$ONLY" != "$tag" ]]; then
+  if _skip_run "$tag"; then
     echo; echo "  ⏭  [$tag] ONLY=$ONLY 이므로 건너뜀"
     continue
   fi
@@ -443,7 +475,7 @@ head1 "완료 — ${DONE_TAGS[*]:-없음}  (총 $((total/3600))h $((total%3600/6
 echo "  결과 위치:"
 for spec in "${RUNS[@]}"; do
   tag="${spec%%|*}"; in_csv="${spec#*|}"
-  [[ -n "$ONLY" && "$ONLY" != "$tag" ]] && continue
+  _skip_run "$tag" && continue
   echo "    $(dirname "$in_csv")/eval/"
 done
 echo

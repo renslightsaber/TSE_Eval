@@ -18,7 +18,8 @@ eval_llmtse.sh 가 남긴 산출물 3종(per-row CSV · summary CSV · sidecar J
   한쪽만 CPU 로 떨어졌다면 여기서 걸린다.
 
 사용법:
-    python scripts/check_eval_done.py                      # LLM-TSE best/last (기본)
+    python scripts/check_eval_done.py                      # 기본 버전(v2)의 best/last
+    python scripts/check_eval_done.py v1                   # 다른 학습 버전
     python scripts/check_eval_done.py 'tpex|/path/to/dir'  # 임의의 (태그|추론디렉터리) 쌍
 """
 from __future__ import annotations
@@ -29,11 +30,20 @@ import sys
 
 import pandas as pd
 
-# 기본 대상 — eval_llmtse.sh 의 RUNS 와 같은 순서.
-DEFAULT_RUNS = [
-    ("best", "/home/work/my-outputs/llmtse/llmtse_baseline_v1"),
-    ("last", "/home/work/my-outputs/llmtse/llmtse_baseline_v1_step50000"),
-]
+# eval_llmtse.sh 의 VERSION 과 같은 개념. 인자 없이 실행하면 이 버전을 본다.
+DEFAULT_VERSION = os.environ.get("VERSION", "v2")
+
+# V1 은 VERSION 이 생기기 전에 채점돼 태그에 버전 접두사가 없다 (llmtse_best.csv).
+# 이 표가 없으면 `check_eval_done.py v1` 이 llmtse_v1_best.csv 를 찾다가 실패한다.
+_LEGACY_TAGS = {"v1": ("best", "last")}
+
+
+def _runs_for(version: str) -> "list[tuple[str, str]]":
+    """학습 버전 이름 -> [(태그, 추론 디렉터리)] — eval_llmtse.sh 의 RUNS 와 같은 규약."""
+    base = os.environ.get("LLMTSE_ROOT", "/home/work/my-outputs/llmtse")
+    best, last = _LEGACY_TAGS.get(version, (f"{version}_best", f"{version}_last"))
+    return [(best, f"{base}/llmtse_baseline_{version}"),
+            (last, f"{base}/llmtse_baseline_{version}_step50000")]
 
 # 보고할 지표. wer 은 corpus micro-WER(총 edits / 총 words)로 집계되며 행별 WER 의
 # 평균과 다르다 — 논문에서 보고하는 쪽은 micro 다.
@@ -47,7 +57,13 @@ LOWER_IS_BETTER = {"wer", "wer_raw"}
 
 
 def main(argv: "list[str]") -> int:
-    runs = ([tuple(a.split("|", 1)) for a in argv] if argv else DEFAULT_RUNS)
+    # 인자 형태 셋: 없음(기본 버전) · 버전 이름 하나 · "태그|디렉터리" 여러 개.
+    if not argv:
+        runs = _runs_for(DEFAULT_VERSION)
+    elif len(argv) == 1 and "|" not in argv[0]:
+        runs = _runs_for(argv[0])
+    else:
+        runs = [tuple(a.split("|", 1)) for a in argv]
 
     done, summaries, meta = [], [], []
     for tag, d in runs:
