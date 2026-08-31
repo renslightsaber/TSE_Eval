@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """scripts/check_eval_done.py — 채점이 끝났는지 확인하고, 끝났으면 결과를 비교한다.
 
-eval_llmtse.sh 가 남긴 산출물 3종(per-row CSV · summary CSV · sidecar JSON)이
+eval_<project>.sh 가 남긴 산출물 3종(per-row CSV · summary CSV · sidecar JSON)이
 모두 존재하는지 보고, 다 있으면 전체 성능·delta·출처 일치를 출력한다.
 
   · 아직 진행 중  → 무엇이 없는지 알려주고 exit 1
@@ -18,9 +18,11 @@ eval_llmtse.sh 가 남긴 산출물 3종(per-row CSV · summary CSV · sidecar J
   한쪽만 CPU 로 떨어졌다면 여기서 걸린다.
 
 사용법:
-    python scripts/check_eval_done.py                      # 기본 버전(v2)의 best/last
-    python scripts/check_eval_done.py v1                   # 다른 학습 버전
-    python scripts/check_eval_done.py 'tpex|/path/to/dir'  # 임의의 (태그|추론디렉터리) 쌍
+    python scripts/check_eval_done.py                    # 기본(llmtse v2)의 best/last
+    python scripts/check_eval_done.py styletse           # 프로젝트의 기본 버전(v1)
+    python scripts/check_eval_done.py llmtse v1          # 프로젝트 + 버전
+    python scripts/check_eval_done.py 'styletse_v1_best|/path/to/dir' ...
+                                                         # 출력 stem 과 디렉터리를 직접
 """
 from __future__ import annotations
 
@@ -31,19 +33,41 @@ import sys
 import pandas as pd
 
 # eval_llmtse.sh 의 VERSION 과 같은 개념. 인자 없이 실행하면 이 버전을 본다.
-DEFAULT_VERSION = os.environ.get("VERSION", "v2")
+# eval_<project>.sh 의 VERSION 과 같은 개념. 인자 없이 실행하면 이 조합을 본다.
+DEFAULT_PROJECT = os.environ.get("PROJECT", "llmtse")
+DEFAULT_VERSION = os.environ.get("VERSION", "")   # 빈 값 = 프로젝트별 기본
 
-# V1 은 VERSION 이 생기기 전에 채점돼 태그에 버전 접두사가 없다 (llmtse_best.csv).
-# 이 표가 없으면 `check_eval_done.py v1` 이 llmtse_v1_best.csv 를 찾다가 실패한다.
-_LEGACY_TAGS = {"v1": ("best", "last")}
+# 프로젝트 규약: 출력 루트 · 디렉터리 이름 패턴 · 기본 버전.
+# eval_llmtse.sh / eval_styletse.sh 의 RUNS 유도와 같은 규약이어야 한다.
+_PROJECTS = {
+    "llmtse":   dict(root="/home/work/my-outputs/llmtse",   default="v2",
+                     best="llmtse_baseline_{v}", last="llmtse_baseline_{v}_step50000"),
+    "styletse": dict(root="/home/work/my-outputs/styletse", default="v1",
+                     best="styletse_{v}_best",   last="styletse_{v}_last"),
+}
+
+# LLM-TSE V1 은 VERSION 이 생기기 전에 채점돼 태그에 버전 접두사가 없다
+# (llmtse_best.csv). 이 표가 없으면 `check_eval_done.py llmtse v1` 이
+# llmtse_v1_best.csv 를 찾다가 실패한다.
+_LEGACY_TAGS = {("llmtse", "v1"): ("best", "last")}
 
 
-def _runs_for(version: str) -> "list[tuple[str, str]]":
-    """학습 버전 이름 -> [(태그, 추론 디렉터리)] — eval_llmtse.sh 의 RUNS 와 같은 규약."""
-    base = os.environ.get("LLMTSE_ROOT", "/home/work/my-outputs/llmtse")
-    best, last = _LEGACY_TAGS.get(version, (f"{version}_best", f"{version}_last"))
-    return [(best, f"{base}/llmtse_baseline_{version}"),
-            (last, f"{base}/llmtse_baseline_{version}_step50000")]
+def _runs_for(project: str, version: str = "") -> "list[tuple[str, str]]":
+    """(프로젝트, 버전) -> [(출력 stem, 추론 디렉터리)].
+
+    stem 은 엔진이 실제로 쓰는 파일명 그대로다 — eval_tse.sh 의
+    `${PROJECT}_${tag}.csv` 와 한 글자도 달라선 안 된다. 그래서 여기서 조립한다.
+    """
+    if project not in _PROJECTS:
+        raise SystemExit(f"모르는 프로젝트: {project!r}. "
+                         f"사용 가능: {sorted(_PROJECTS)}")
+    cfg = _PROJECTS[project]
+    v = version or cfg["default"]
+    root = os.environ.get(f"{project.upper()}_ROOT", cfg["root"])
+    best, last = _LEGACY_TAGS.get((project, v), (f"{v}_best", f"{v}_last"))
+    return [(f"{project}_{best}", f"{root}/" + cfg["best"].format(v=v)),
+            (f"{project}_{last}", f"{root}/" + cfg["last"].format(v=v))]
+
 
 # 보고할 지표. wer 은 corpus micro-WER(총 edits / 총 words)로 집계되며 행별 WER 의
 # 평균과 다르다 — 논문에서 보고하는 쪽은 micro 다.
@@ -56,19 +80,51 @@ KEYS = ("si_sdr", "si_sdri", "input_si_sdr", "stoi", "estoi", "pesq",
 LOWER_IS_BETTER = {"wer", "wer_raw"}
 
 
-def main(argv: "list[str]") -> int:
-    # 인자 형태 셋: 없음(기본 버전) · 버전 이름 하나 · "태그|디렉터리" 여러 개.
+_USAGE = ("사용법: (인자 없음) | <프로젝트> [버전] | '<stem>|<디렉터리>' ...\n"
+          f"        프로젝트: {sorted(_PROJECTS)}")
+
+
+def _parse_args(argv: "list[str]") -> "list[tuple[str, str]]":
+    """인자 -> [(출력 stem, 추론 디렉터리)].
+
+    ★ 잘못된 형식은 SystemExit 으로 **명확히** 알린다. 이 스크립트는
+    `check_eval_done.py && ...` 처럼 조건부 실행에 쓰라고 문서화돼 있어,
+    traceback 이 나면 원인을 알 수 없는 채로 실패한 것과 구별되지 않는다.
+    """
     if not argv:
-        runs = _runs_for(DEFAULT_VERSION)
-    elif len(argv) == 1 and "|" not in argv[0]:
-        runs = _runs_for(argv[0])
-    else:
-        runs = [tuple(a.split("|", 1)) for a in argv]
+        return _runs_for(DEFAULT_PROJECT, DEFAULT_VERSION)
+
+    piped = [a for a in argv if "|" in a]
+    if piped and len(piped) != len(argv):
+        raise SystemExit(f"인자를 섞어 쓸 수 없습니다: {argv}\n{_USAGE}")
+
+    if piped:
+        runs = []
+        for a in argv:
+            stem, _, d = a.partition("|")
+            if not stem or not d:
+                raise SystemExit(f"형식 오류: {a!r} — '<stem>|<디렉터리>' 여야 합니다\n{_USAGE}")
+            runs.append((stem, d))
+        return runs
+
+    if len(argv) > 2:
+        raise SystemExit(f"인자가 너무 많습니다: {argv}\n{_USAGE}")
+
+    proj = argv[0]
+    ver = argv[1] if len(argv) == 2 else DEFAULT_VERSION
+    # 구 호출법 하위호환: 버전만 준 경우(`check_eval_done.py v1`).
+    if proj not in _PROJECTS and proj.startswith("v"):
+        proj, ver = DEFAULT_PROJECT, argv[0]
+    return _runs_for(proj, ver)
+
+
+def main(argv: "list[str]") -> int:
+    runs = _parse_args(argv)
 
     done, summaries, meta = [], [], []
-    for tag, d in runs:
+    for tag, d in runs:          # tag = 출력 stem (예: styletse_v1_best)
         ev = os.path.join(d, "eval")
-        paths = {k: os.path.join(ev, f"llmtse_{tag}{sfx}") for k, sfx in
+        paths = {k: os.path.join(ev, f"{tag}{sfx}") for k, sfx in
                  (("per", ".csv"), ("sum", "_summary.csv"), ("cfg", "_config.json"))}
         missing = [os.path.basename(p) for p in paths.values() if not os.path.isfile(p)]
         if missing:
@@ -95,7 +151,7 @@ def main(argv: "list[str]") -> int:
         print(f"  ✓ [{tag}] {len(df)}행 · 에러 {err} · NaN {nan_metrics or '없음'} "
               f"· 축 {sorted(s['axis'].unique())}{flag}")
         done.append(tag)
-        summaries.append(allrow.iloc[[0]].assign(model_name=f"llmtse_{tag}"))
+        summaries.append(allrow.iloc[[0]].assign(model_name=tag))
         meta.append((tag, json.load(open(paths["cfg"]))))
 
     print()
