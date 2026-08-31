@@ -115,7 +115,7 @@ and 1.` 로 거부합니다. 예전 `metrics.dnsmos()` 는 그 제약을 `np.cli
   진짜 원시값" 은 애초에 계산할 수 없습니다. 그 값은 정규화를 안 한 게 아니라 **가장 많이
   변형된** 값입니다.
 - **확인법**: `dnsmos_ovrl` 과 `dnsmos_ovrl_clipped` 가 같으면 정규화가 안 걸렸거나 예측이
-  이미 ±1 안에 있다는 뜻입니다. `scripts/eval_llmtse.sh` 가 매 런마다 이 차이를 출력합니다.
+  이미 ±1 안에 있다는 뜻입니다. `scripts/eval_tse.sh`(래퍼: `eval_llmtse.sh` · `eval_styletse.sh`)가 매 런마다 이 차이를 출력합니다.
 
 **레벨에 영향받지 않는 지표** (예측을 정답 레벨로 맞춰 재계산한 실측 차이):
 
