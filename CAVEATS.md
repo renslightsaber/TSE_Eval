@@ -1,7 +1,7 @@
 # ⚠️ TSE_Eval 주의사항 (Caveats)
 
 > 이 문서는 **실제로 겪고 실측으로 확인한 것만** 모았습니다. 추측은 없습니다.
-> 설치 절차는 [requirements/h200/INSTALL.md](requirements/h200/INSTALL.md), 사용법은 [USE_GUIDE.md](USE_GUIDE.md) 를 보세요.
+> 설치 절차는 [H100/H200](requirements/h200/INSTALL.md) · [RTX A6000](requirements/a6000/INSTALL.md) 가이드, 사용법은 [USE_GUIDE.md](USE_GUIDE.md) 를 보세요.
 
 가장 위험한 것은 에러가 나는 문제가 아니라 **에러 없이 조용히 틀린 값을 내는** 문제입니다.
 그래서 §1 을 맨 앞에 뒀습니다. 논문 숫자를 만들기 전에 §1 만이라도 읽으세요.

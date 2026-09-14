@@ -2,7 +2,7 @@
 
 > 이 문서는 **처음 보는 사람도** TSE_Eval 을 바로 쓸 수 있도록 단계별로 설명합니다.
 > 개요만 빠르게 보려면 [README.md](README.md) 를 참고하세요.
-> 설치는 [requirements/h200/INSTALL.md](requirements/h200/INSTALL.md), **주의사항·재현성 체크리스트는 [CAVEATS.md](CAVEATS.md)** 입니다.
+> 설치는 [H100/H200 가이드](requirements/h200/INSTALL.md) · [RTX A6000 가이드](requirements/a6000/INSTALL.md), **주의사항·재현성 체크리스트는 [CAVEATS.md](CAVEATS.md)** 입니다.
 
 ---
 
@@ -26,7 +26,7 @@
 > 🛠️ **H100 / H200 을 쓰신다면 → [requirements/h200/INSTALL.md](requirements/h200/INSTALL.md) 를 그대로 따라가세요.**
 > 단계별 명령·소요 시간·정상 출력·문제 해결이 모두 정리돼 있습니다. 이 문서는 **사용법** 전용입니다.
 
-RTX A6000 은 아래로 충분합니다(패키지 핀은 H200 파일과 동일). TPEX 와 **동일한 환경**(Python 3.10.20, torch 2.5.1+cu121)을 권장합니다.
+🔵 **RTX A6000 → [requirements/a6000/INSTALL.md](requirements/a6000/INSTALL.md)** (단계별 명령 · 검증 스크립트 · 문제 해결). 요약하면 아래와 같습니다(패키지 핀은 H200 파일과 동일). TPEX 와 **동일한 환경**(Python 3.10.20, torch 2.5.1+cu121)을 권장합니다.
 
 ```bash
 # (권장) 전용 conda env
@@ -56,6 +56,8 @@ CPU 만 있는 머신은 A6000 파일의 `onnxruntime-gpu` 줄을 `onnxruntime==
 
 ```bash
 python -c "import tse_eval; print(tse_eval.__version__)"
+python requirements/h200/verify_h200_env.py --full      # H100/H200 — 전체 설치 검증
+python requirements/a6000/verify_a6000_env.py --full    # RTX A6000
 ```
 
 ---

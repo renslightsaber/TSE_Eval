@@ -112,7 +112,7 @@ LLM-TSE 실측 영향: `dnsmos_ovrl` 2.55 → **2.91**, micro-WER 0.593 → **0.
 | 환경 | 방법 |
 |---|---|
 | **NVIDIA H100 / H200** | 👉 **[requirements/h200/INSTALL.md](requirements/h200/INSTALL.md)** 를 따라가세요 (`requirements/h200/requirements_h200.txt` 기준, 단계별 안내) |
-| **NVIDIA RTX A6000** | `requirements/a6000/requirements_a6000.txt` — 패키지 핀은 H200 파일과 동일, 설치 순서도 같습니다 |
+| **NVIDIA RTX A6000** | 👉 **[requirements/a6000/INSTALL.md](requirements/a6000/INSTALL.md)** — 패키지 핀은 H200 과 동일, `HF_HOME` 직접 지정이 필요합니다 |
 | CPU only | A6000 파일에서 `onnxruntime-gpu` 줄을 `onnxruntime==1.20.2` 로 바꾸고 `pip install -e '.[cpu,test]'` |
 
 > ⚠️ 두 requirements 파일 모두 **`librosa` 를 포함**합니다 — 지우지 마세요.
@@ -120,6 +120,9 @@ LLM-TSE 실측 영향: `dnsmos_ovrl` 2.55 → **2.91**, micro-WER 0.593 → **0.
 > **DNSMOS 4개 열이 에러 없이 전부 `nan`** 이 됩니다.
 
 ```bash
+# 설치 검증 (GPU 별 스크립트 — 마지막 줄이 "✅ 설치가 올바릅니다.")
+python requirements/h200/verify_h200_env.py --full      # A6000: requirements/a6000/verify_a6000_env.py
+
 # 2) 합성 예제 생성 (실제 데이터 없이 바로 체험)
 python examples/make_example.py
 
@@ -268,8 +271,8 @@ tse_eval/
 ├── examples/            # 합성 예제 생성기 + sample_input.csv
 ├── tests/               # pytest (합성 신호, CPU only)
 ├── requirements/
-│   ├── h200/                # H100/H200 — requirements_h200.txt · INSTALL.md · pip freeze 스냅샷
-│   └── a6000/               # RTX A6000 — requirements_a6000.txt
+│   ├── h200/                # H100/H200 — requirements_h200.txt · INSTALL.md · verify_h200_env.py · pip freeze 스냅샷
+│   └── a6000/               # RTX A6000 — requirements_a6000.txt · INSTALL.md · verify_a6000_env.py
 ├── USE_GUIDE.md             # 사용법 (CLI 옵션, 컬럼 인식, FAQ)
 ├── CAVEATS.md               # ⚠️ 주의사항 — 조용히 틀리는 것들, 재현성 체크리스트
 └── README.md
