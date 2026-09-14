@@ -112,11 +112,12 @@ LLM-TSE 실측 영향: `dnsmos_ovrl` 2.55 → **2.91**, micro-WER 0.593 → **0.
 | 환경 | 방법 |
 |---|---|
 | **NVIDIA H100 / H200** | 👉 **[requirements/h200/INSTALL.md](requirements/h200/INSTALL.md)** 를 따라가세요 (`requirements/h200/requirements_h200.txt` 기준, 단계별 안내) |
-| 그 외 / CPU only | `pip install -r requirements/a6000/requirements_a6000.txt` + `pip install librosa==0.11.0` |
+| **NVIDIA RTX A6000** | `requirements/a6000/requirements_a6000.txt` — 패키지 핀은 H200 파일과 동일, 설치 순서도 같습니다 |
+| CPU only | A6000 파일에서 `onnxruntime-gpu` 줄을 `onnxruntime==1.20.2` 로 바꾸고 `pip install -e '.[cpu,test]'` |
 
-> ⚠️ `requirements/a6000/requirements_a6000.txt` 는 A6000/CPU 시절 파일이라 **`librosa` 가 빠져 있습니다.**
+> ⚠️ 두 requirements 파일 모두 **`librosa` 를 포함**합니다 — 지우지 마세요.
 > `librosa` 없이 돌리면 `speechmos` 가 내부에서 그것을 import 하지 못해
-> **DNSMOS 4개 열이 에러 없이 전부 `nan`** 이 됩니다. 꼭 같이 설치하세요.
+> **DNSMOS 4개 열이 에러 없이 전부 `nan`** 이 됩니다.
 
 ```bash
 # 2) 합성 예제 생성 (실제 데이터 없이 바로 체험)
@@ -238,12 +239,13 @@ row = compute_row_metrics(est, ref, mix, sr=24000)   # dict
 | torch / torchaudio | 2.5.1+cu121 |
 | numpy | 1.26.4 (`<2`) |
 
-`pesq`, `pystoi`, `speechmos`, `librosa`, `onnxruntime`, `pandas`, `soundfile` —
+`pesq`, `pystoi`, `speechmos`, `librosa`, `onnxruntime-gpu`, `speechbrain`, `transformers`, `jiwer`, `pandas`, `soundfile` —
 전체 핀은 **H100/H200** 은 [`requirements/h200/requirements_h200.txt`](requirements/h200/requirements_h200.txt),
-그 외는 [`requirements/a6000/requirements_a6000.txt`](requirements/a6000/requirements_a6000.txt) 참고.
+**RTX A6000** 은 [`requirements/a6000/requirements_a6000.txt`](requirements/a6000/requirements_a6000.txt) 참고 (두 파일의 패키지 핀은 동일).
 
-> **CPU만 있어도 동작**합니다. GPU 는 필수가 아닙니다(DNSMOS ONNX 는 CPU 추론).
-> Speaker Similarity / WER 확장 지표를 쓸 때만 GPU 가 도움이 됩니다.
+> **CPU만 있어도 동작**합니다. GPU 는 필수가 아닙니다 — DNSMOS 기본 providers 는 CUDA 지만
+> `--dnsmos-providers cpu` 로 CPU 에서 돌릴 수 있습니다(대신 약 3배 느림, 값은 최대 ~3e-3 차이).
+> Speaker Similarity / WER 확장 지표도 GPU 가 있으면 훨씬 빠릅니다.
 
 ---
 

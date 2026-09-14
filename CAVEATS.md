@@ -433,8 +433,8 @@ pip install --cache-dir /home/work/my-code/pip_cache ...
 extra 로 분리했습니다:
 
 ```bash
-pip install -e '.[test]'        # H100/H200 (onnxruntime-gpu 는 requirements/h200/requirements_h200.txt 가 담당)
-pip install -e '.[cpu,test]'    # 그 외
+pip install -e '.[test]'        # H100/H200 · RTX A6000 (onnxruntime-gpu 는 requirements/{h200,a6000}/requirements_*.txt 가 담당)
+pip install -e '.[cpu,test]'    # CPU only
 ```
 
 확인: `pip list | grep onnxruntime` → 한 줄만. `pip check` → `No broken requirements found.`

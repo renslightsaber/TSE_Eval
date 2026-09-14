@@ -26,27 +26,30 @@
 > 🛠️ **H100 / H200 을 쓰신다면 → [requirements/h200/INSTALL.md](requirements/h200/INSTALL.md) 를 그대로 따라가세요.**
 > 단계별 명령·소요 시간·정상 출력·문제 해결이 모두 정리돼 있습니다. 이 문서는 **사용법** 전용입니다.
 
-그 외 환경(CPU 등)은 아래로 충분합니다. TPEX 와 **동일한 환경**(Python 3.10.20, torch 2.5.1+cu121)을 권장합니다.
+RTX A6000 은 아래로 충분합니다(패키지 핀은 H200 파일과 동일). TPEX 와 **동일한 환경**(Python 3.10.20, torch 2.5.1+cu121)을 권장합니다.
 
 ```bash
 # (권장) 전용 conda env
 conda create -n tseeval python=3.10.20 -y
 conda activate tseeval
 
-# 의존성 설치 (torch/torchaudio 는 파일 안의 cu121 인덱스에서 받음)
+# torch 먼저 단독으로, 그다음 나머지 (librosa · onnxruntime-gpu · WER/Spk-Sim 스택 포함)
+pip install torch==2.5.1+cu121 torchaudio==2.5.1+cu121 --index-url https://download.pytorch.org/whl/cu121
 pip install -r requirements/a6000/requirements_a6000.txt
-
-# ★ 필수 추가 — 없으면 DNSMOS 4개 열이 조용히 전부 nan 이 됩니다
-pip install librosa==0.11.0
+pip install -e '.[test]'
 ```
 
-> ⚠️ **`librosa` 를 빼먹지 마세요.** `speechmos` 는 의존성을 선언하지 않는데 내부에서
+CPU 만 있는 머신은 A6000 파일의 `onnxruntime-gpu` 줄을 `onnxruntime==1.20.2` 로 바꾸고
+`pip install -e '.[cpu,test]'` 로 설치하세요.
+
+> ⚠️ **`librosa` 를 빼지 마세요.** `speechmos` 는 의존성을 선언하지 않는데 내부에서
 > `librosa` 를 import 하고, 지표 함수는 예외를 `nan` 으로 삼킵니다.
 > 그래서 에러 메시지 없이 `dnsmos_sig/bak/ovrl/p808` 이 전 행 `nan` 이 됩니다.
 >
-> 💡 **GPU 없이 CPU만 있어도 됩니다.** DNSMOS(ONNX)는 CPU로 돌아갑니다.
-> `onnxruntime-gpu` 로 바꿔도 **DNSMOS 는 그대로 CPU 를 씁니다** — `speechmos` 가
-> 세션에 `providers` 를 넘기지 않기 때문입니다(실측 확인).
+> 💡 **GPU 없이 CPU만 있어도 됩니다.** `--dnsmos-providers cpu` 로 DNSMOS(ONNX)를 CPU 에서 돌리세요.
+> `speechmos` 자체는 세션에 `providers` 를 넘기지 않아 CPU 만 쓰지만, TSE_Eval 은
+> `tse_eval/ort_setup.py` 가 providers 를 주입하므로 `onnxruntime-gpu` 가 깔려 있으면
+> **기본값이 CUDA** 입니다(실측 8.4배). 실제로 쓰인 EP 는 sidecar JSON 의 `dnsmos.actual_providers`.
 > 자세한 속도 수치는 [requirements/h200/INSTALL.md 의 DNSMOS 속도](requirements/h200/INSTALL.md#dnsmos-속도-실측) 참고.
 
 설치 확인:

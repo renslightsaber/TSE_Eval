@@ -32,10 +32,10 @@ dependencies = [
 # An ONNX runtime is required for DNSMOS but is deliberately NOT a base
 # dependency: the CPU and GPU builds are separate distributions that must not
 # both be installed. Pick one.
-#   H100/H200  -> requirements/h200/requirements_h200.txt already pins onnxruntime-gpu, so
-#                 `pip install -e . --no-deps` keeps it intact. Declaring the CPU
-#                 build here instead made `pip check` complain forever.
-#   otherwise  -> pip install -e '.[cpu]'
+#   H100/H200 and RTX A6000 -> requirements/{h200,a6000}/requirements_*.txt already
+#                 pin onnxruntime-gpu, so `pip install -e .` keeps it intact.
+#                 Declaring the CPU build here instead made `pip check` complain forever.
+#   CPU only   -> pip install -e '.[cpu]'
 [project.optional-dependencies]
 cpu = ["onnxruntime"]
 gpu = ["onnxruntime-gpu>=1.19.2,<1.21"]

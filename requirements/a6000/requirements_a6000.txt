@@ -1,42 +1,84 @@
 # ─────────────────────────────────────────────────────────────────────────
-# TSE_Eval requirements
+# TSE_Eval requirements — NVIDIA RTX A6000 (Ampere, sm_86)
 #
 # Python 3.10.20  (must match — same as the TPEX project environment)
 #
-# torch / torchaudio are pinned to the exact TPEX versions (CUDA 12.1 build).
-# Install torch/torchaudio FIRST from the PyTorch cu121 index, then the rest.
+# 설치 순서·검증은 requirements/a6000/INSTALL.md 를 따르세요. 요약:
+#   pip install torch==2.5.1+cu121 torchaudio==2.5.1+cu121 \
+#       --index-url https://download.pytorch.org/whl/cu121
 #   pip install -r requirements/a6000/requirements_a6000.txt
+#   pip install -e '.[test]'
+#
+# ★ 패키지 핀은 requirements/h200/requirements_h200.txt 와 ★ 동일 ★ 합니다.
+#   세 프로젝트(TPEX / LLM-TSE / StyleTSE)를 A6000 에서 채점하든 H200 에서 채점하든
+#   같은 바이너리로 계산해야 숫자가 비교 가능하기 때문입니다.
+#   GPU 별로 다른 것은 "검증 기준"(sm_86 · capability (8,6) · driver ≥ 525)뿐입니다.
+#   각 핀의 근거와 함정 12가지는 H200 파일의 [B] 주석에 있습니다.
+#
+# 2026-09-14 현행화 — 이전판(2026-08 초)과의 차이:
+#   ① onnxruntime(CPU)  →  onnxruntime-gpu   DNSMOS 기본 providers 가 CUDA 이므로
+#                                             (tse_eval/ort_setup.py, 실측 8.4배)
+#   ② WER / Speaker Similarity 의존성 정식 편입 (예전엔 "추가로 설치" 주석이었음)
+#      — scripts/eval_tse.sh 사전점검이 transformers · jiwer · speechbrain 을 요구합니다.
+#   ③ scipy / protobuf / requests / sentencepiece / huggingface_hub /
+#      setuptools<81 / pytest 명시 핀 (H200 파일 resolve 결과와 동일하게)
 # ─────────────────────────────────────────────────────────────────────────
 
+# ── PyTorch (CUDA 12.1 build; pinned to TPEX) ────────────────────────────
+#    ★ INSTALL.md ② 에서 먼저 단독 설치하는 것을 권장. 여기 핀은 안전망입니다.
+#    driver 525+ 면 cu121 앱이 돕니다 (tpex A6000 실기: driver 530.30.02).
 --extra-index-url https://download.pytorch.org/whl/cu121
-
-# ── Core (pinned to TPEX) ────────────────────────────────────────────────
 torch==2.5.1+cu121
 torchaudio==2.5.1+cu121
-numpy==1.26.4            # < 2.0 (torch 2.5.1 / F5-TTS constraint)
 
-# ── Data / IO ────────────────────────────────────────────────────────────
-pandas==2.3.1
+# ── Data / IO / numerics ─────────────────────────────────────────────────
+numpy==1.26.4                 # < 2.0 (torch 2.5.1 ABI + 형제 repo 와 동일)
+scipy==1.15.3                 # speechbrain 요구(>=1.4.1)
+pandas==2.3.1                 # CSV in/out + overlap 요약
+soundfile==0.13.1             # torchaudio load backend
 tqdm==4.67.1
-soundfile==0.13.1        # torchaudio load backend
 
-# ── Metrics ──────────────────────────────────────────────────────────────
-pesq==0.0.4              # PESQ (wideband, 16 kHz)
-pystoi==0.4.1            # STOI / ESTOI
-speechmos==0.0.1.1       # DNSMOS (SIG / BAK / OVRL) — ONNX models bundled, fully offline
-librosa==0.11.0          # ★★ DNSMOS 필수 ★★ speechmos/dnsmos.py:4 가 librosa 를 import 하는데
-                         #   speechmos 휠은 의존성을 하나도 선언하지 않습니다.
-                         #   이 줄이 없으면 dnsmos_* 4개 열이 ★ 전 행 조용히 nan ★ 이 됩니다.
-                         #   (지표 함수가 예외를 nan 으로 삼키므로 에러 메시지도 없습니다.)
-                         #   ★ 삭제 금지 — 실측 재현 확인
-onnxruntime==1.20.2      # DNSMOS backend (CPU). For GPU use: onnxruntime-gpu>=1.19.2,<1.21
-PyYAML==6.0.2            # configs/config.yaml
+# ── Metrics: reference-based ─────────────────────────────────────────────
+#    SI-SDR / SI-SDRi 는 tse_eval/metrics.py 에 네이티브 구현 → 의존성 없음
+pesq==0.0.4                   # PESQ wideband(16 kHz). ★ sdist(C 확장) — gcc 필요
+pystoi==0.4.1                 # STOI / ESTOI
+
+# ── Metrics: DNSMOS (SIG / BAK / OVRL / P.808) ───────────────────────────
+speechmos==0.0.1.1            # ONNX models bundled → 모델 다운로드 없음
+librosa==0.11.0               # ★★ DNSMOS 필수 ★★ speechmos/dnsmos.py:4 가 librosa 를 import 하는데
+                              #   speechmos 휠은 의존성을 하나도 선언하지 않습니다.
+                              #   이 줄이 없으면 dnsmos_* 열이 ★ 전 행 조용히 nan ★ 이 됩니다.
+                              #   (지표 함수가 예외를 nan 으로 삼키므로 에러 메시지도 없습니다.)
+                              #   ★ 삭제 금지 — 실측 재현 확인
+onnxruntime-gpu>=1.19.2,<1.21 # ★ 1.19.2 미만 금지: 1.18.x 는 cuDNN 8 빌드라 torch cu121 이 깔아주는
+                              #   cuDNN 9 와 맞지 않아 CUDA EP 로드 실패
+                              #   (tpex/requirements/a6000/README.md §3-2, A6000 실기).
+                              #   py3.10 상한은 1.20.2. CPU 전용 머신이면 이 줄을
+                              #   onnxruntime==1.20.2 로 바꾸고 `pip install -e '.[cpu,test]'`.
+protobuf>=4.25.3,<7           # onnxruntime-gpu 가 무핀 요구 → 상한 고정
+requests>=2.28                # huggingface_hub / speechbrain 다운로드 경로
+
+# ── Metrics: Speaker Similarity (ECAPA-TDNN, 16 kHz) ─────────────────────
+speechbrain==1.0.3
+huggingface_hub==0.34.4       # 형제 repo 와 동일 핀
+sentencepiece==0.2.0          # speechbrain 하드 의존 (ECAPA 자체는 미사용)
+PyYAML==6.0.2                 # configs/config.yaml + hyperpyyaml
+
+# ── Metrics: WER (Whisper large-v3 + jiwer) ──────────────────────────────
+transformers==4.46.3          # 형제 repo 와 동일 핀 (tokenizers 0.20.3 전이)
+accelerate==1.10.0            # ★ 필수 — from_pretrained(low_cpu_mem_usage=True) 가 요구
+jiwer==3.1.0                  # corpus micro-WER (llmtse/eval.py 관례)
+
+# ── Preventive pin (H200 파일 [B-6]) ─────────────────────────────────────
+setuptools<81
+
+# ── Dev (tests) ──────────────────────────────────────────────────────────
+pytest>=8.0,<9                # tests/ (CPU-only / offline)
+                              # ※ asteroid 는 SI-SDR 등가성 검증 오라클로만 쓰입니다
+                              #   (22개 패키지 추가):  pip install -e '.[test]'
 
 # ── Notes ────────────────────────────────────────────────────────────────
-# - SI-SDR / SI-SDRi are implemented natively (no `asteroid` dependency).
-#   asteroid 는 등가성 검증 오라클로만 쓰입니다:  pip install -e '.[test]'
-# - 이 파일은 A6000 / CPU 기준입니다. H100/H200 은 requirements/h200/requirements_h200.txt 를 쓰세요
-#   (onnxruntime-gpu + WER/Speaker-Sim 의존성까지 포함, 함정 12가지 주석 포함).
-# - 확장 지표(WER / Speaker Similarity)를 이 파일 기준 환경에서 쓰려면 추가로:
-#     pip install transformers==4.46.3 accelerate==1.10.0 jiwer==3.1.0 speechbrain==1.0.3
-#   모델은 `python scripts/download_models.py` 로 받습니다.
+# - 모델 2개(ECAPA ~89 MB, Whisper large-v3 ~3.1 GB)는 `python scripts/download_models.py`
+#   로 받습니다. HF_HOME 을 먼저 영속 경로로 잡아두세요 (INSTALL.md 참고).
+# - CPU 용 `onnxruntime` 과 `onnxruntime-gpu` 가 함께 깔리면 충돌합니다.
+#   `pip list | grep onnxruntime` 결과가 onnxruntime-gpu 한 줄이어야 합니다.
