@@ -13,8 +13,9 @@ authors = [{ name = "Ro Hoon OH" }]
 keywords = ["target-speech-extraction", "tse", "speech-enhancement", "evaluation", "si-sdr", "pesq", "stoi", "dnsmos"]
 
 # NOTE: torch / torchaudio are intentionally NOT declared here because they
-# require the CUDA-specific index URL. Install everything via requirements.txt:
-#     pip install -r requirements.txt
+# require the CUDA-specific index URL. Install everything via the per-GPU file:
+#     pip install -r requirements/h200/requirements_h200.txt     (H100/H200)
+#     pip install -r requirements/a6000/requirements_a6000.txt   (RTX A6000)
 dependencies = [
     "numpy<2",
     "pandas",
@@ -31,7 +32,7 @@ dependencies = [
 # An ONNX runtime is required for DNSMOS but is deliberately NOT a base
 # dependency: the CPU and GPU builds are separate distributions that must not
 # both be installed. Pick one.
-#   H100/H200  -> requirements_h200.txt already pins onnxruntime-gpu, so
+#   H100/H200  -> requirements/h200/requirements_h200.txt already pins onnxruntime-gpu, so
 #                 `pip install -e . --no-deps` keeps it intact. Declaring the CPU
 #                 build here instead made `pip check` complain forever.
 #   otherwise  -> pip install -e '.[cpu]'

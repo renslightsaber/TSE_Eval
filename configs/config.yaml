@@ -145,7 +145,7 @@ wer:
 
 # Speaker Similarity: cosine of ECAPA embeddings, estimate vs reference.
 # ECAPA is 16 kHz-only and does NOT resample its input — a 24 kHz waveform
-# yields wrong embeddings with no error at all (requirements_h200.txt [B-9]).
+# yields wrong embeddings with no error at all (requirements/h200/requirements_h200.txt [B-9]).
 # The sample-rate policy handles that; do not bypass it.
 spk_sim:
   model_id: speechbrain/spkrec-ecapa-voxceleb

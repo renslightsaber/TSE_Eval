@@ -2,7 +2,7 @@
 
 > 이 문서는 **처음 보는 사람도** TSE_Eval 을 바로 쓸 수 있도록 단계별로 설명합니다.
 > 개요만 빠르게 보려면 [README.md](README.md) 를 참고하세요.
-> 설치는 [INSTALL.md](INSTALL.md), **주의사항·재현성 체크리스트는 [CAVEATS.md](CAVEATS.md)** 입니다.
+> 설치는 [requirements/h200/INSTALL.md](requirements/h200/INSTALL.md), **주의사항·재현성 체크리스트는 [CAVEATS.md](CAVEATS.md)** 입니다.
 
 ---
 
@@ -23,7 +23,7 @@
 
 ## 1. 설치
 
-> 🛠️ **H100 / H200 을 쓰신다면 → [INSTALL.md](INSTALL.md) 를 그대로 따라가세요.**
+> 🛠️ **H100 / H200 을 쓰신다면 → [requirements/h200/INSTALL.md](requirements/h200/INSTALL.md) 를 그대로 따라가세요.**
 > 단계별 명령·소요 시간·정상 출력·문제 해결이 모두 정리돼 있습니다. 이 문서는 **사용법** 전용입니다.
 
 그 외 환경(CPU 등)은 아래로 충분합니다. TPEX 와 **동일한 환경**(Python 3.10.20, torch 2.5.1+cu121)을 권장합니다.
@@ -33,8 +33,8 @@
 conda create -n tseeval python=3.10.20 -y
 conda activate tseeval
 
-# 의존성 설치 (torch/torchaudio 는 requirements.txt 안의 cu121 인덱스에서 받음)
-pip install -r requirements.txt
+# 의존성 설치 (torch/torchaudio 는 파일 안의 cu121 인덱스에서 받음)
+pip install -r requirements/a6000/requirements_a6000.txt
 
 # ★ 필수 추가 — 없으면 DNSMOS 4개 열이 조용히 전부 nan 이 됩니다
 pip install librosa==0.11.0
@@ -47,7 +47,7 @@ pip install librosa==0.11.0
 > 💡 **GPU 없이 CPU만 있어도 됩니다.** DNSMOS(ONNX)는 CPU로 돌아갑니다.
 > `onnxruntime-gpu` 로 바꿔도 **DNSMOS 는 그대로 CPU 를 씁니다** — `speechmos` 가
 > 세션에 `providers` 를 넘기지 않기 때문입니다(실측 확인).
-> 자세한 속도 수치는 [INSTALL.md 의 DNSMOS 속도](INSTALL.md#dnsmos-속도-실측) 참고.
+> 자세한 속도 수치는 [requirements/h200/INSTALL.md 의 DNSMOS 속도](requirements/h200/INSTALL.md#dnsmos-속도-실측) 참고.
 
 설치 확인:
 
@@ -310,7 +310,7 @@ row = compute_row_metrics(est, ref, mix, sr=24000)   # dict, 키 = METRIC_COLUMN
 아니요. 전부 CPU 로 동작합니다. 대량 평가 시 속도를 위해 `onnxruntime-gpu` 를 쓸 수 있습니다.
 
 **Q. 결과가 재현되나요?**
-동일 입력·동일 버전에서 결정론적입니다. 지표 라이브러리 버전이 다르면 소수점 이하가 달라질 수 있으니 [`requirements.txt`](requirements.txt) 핀을 맞추세요.
+동일 입력·동일 버전에서 결정론적입니다. 지표 라이브러리 버전이 다르면 소수점 이하가 달라질 수 있으니 [`requirements/h200/requirements_h200.txt`](requirements/h200/requirements_h200.txt) 핀을 맞추세요.
 
 ---
 
@@ -336,7 +336,7 @@ python -m tse_eval -i manifest.csv -o out.csv --model-name tpex \
 
 ### 모델 준비
 
-[`requirements_h200.txt`](requirements_h200.txt) 에 의존성이 핀되어 있고, 가중치는 스크립트 하나로 받습니다:
+[`requirements/h200/requirements_h200.txt`](requirements/h200/requirements_h200.txt) 에 의존성이 핀되어 있고, 가중치는 스크립트 하나로 받습니다:
 
 ```bash
 export HF_HOME=/home/work/my-checkpoints/hf_cache   # ★ 영속 저장소 (홈은 세션 종료 시 삭제됨)

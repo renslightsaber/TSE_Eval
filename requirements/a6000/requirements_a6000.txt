@@ -5,7 +5,7 @@
 #
 # torch / torchaudio are pinned to the exact TPEX versions (CUDA 12.1 build).
 # Install torch/torchaudio FIRST from the PyTorch cu121 index, then the rest.
-#   pip install -r requirements.txt
+#   pip install -r requirements/a6000/requirements_a6000.txt
 # ─────────────────────────────────────────────────────────────────────────
 
 --extra-index-url https://download.pytorch.org/whl/cu121
@@ -35,7 +35,7 @@ PyYAML==6.0.2            # configs/config.yaml
 # ── Notes ────────────────────────────────────────────────────────────────
 # - SI-SDR / SI-SDRi are implemented natively (no `asteroid` dependency).
 #   asteroid 는 등가성 검증 오라클로만 쓰입니다:  pip install -e '.[test]'
-# - 이 파일은 A6000 / CPU 기준입니다. H100/H200 은 requirements_h200.txt 를 쓰세요
+# - 이 파일은 A6000 / CPU 기준입니다. H100/H200 은 requirements/h200/requirements_h200.txt 를 쓰세요
 #   (onnxruntime-gpu + WER/Speaker-Sim 의존성까지 포함, 함정 12가지 주석 포함).
 # - 확장 지표(WER / Speaker Similarity)를 이 파일 기준 환경에서 쓰려면 추가로:
 #     pip install transformers==4.46.3 accelerate==1.10.0 jiwer==3.1.0 speechbrain==1.0.3

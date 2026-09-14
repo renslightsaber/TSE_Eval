@@ -143,7 +143,7 @@ def print_environment(hf_home: Path, device: str) -> None:
             kv("gpu", f"{torch.cuda.get_device_name(0)} "
                       f"sm_{''.join(map(str, torch.cuda.get_device_capability(0)))}")
     except ImportError:
-        fail("torch 가 없습니다. requirements_h200.txt 를 먼저 설치하세요.")
+        fail("torch 가 없습니다. requirements/h200/requirements_h200.txt 를 먼저 설치하세요.")
         raise
 
 
@@ -337,7 +337,7 @@ def verify_whisper(model, processor, device: str) -> bool:
             fail(f"jiwer.wer 가 0.5 가 아닙니다: {w}")
             passed = False
     except ImportError:
-        fail("jiwer 가 없습니다. `pip install -r requirements_h200.txt` 를 다시 실행하세요.")
+        fail("jiwer 가 없습니다. `pip install -r requirements/h200/requirements_h200.txt` 를 다시 실행하세요.")
         passed = False
 
     return passed

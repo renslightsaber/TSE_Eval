@@ -51,7 +51,7 @@ pip install --cache-dir /home/work/my-code/pip_cache \
     --index-url https://download.pytorch.org/whl/cu121
 
 # ③ 나머지 패키지
-pip install --cache-dir /home/work/my-code/pip_cache -r requirements_h200.txt
+pip install --cache-dir /home/work/my-code/pip_cache -r requirements/h200/requirements_h200.txt
 
 # ④ 프로젝트 자체 + 테스트 도구(pytest, asteroid)
 pip install --cache-dir /home/work/my-code/pip_cache -e '.[test]'
@@ -61,7 +61,7 @@ export HF_HOME=/home/work/my-checkpoints/hf_cache
 python scripts/download_models.py
 
 # ⑦ 박제
-pip freeze --all > h200_pip_freeze_$(date +%Y%m%d).txt
+pip freeze --all > requirements/h200/h200_pip_freeze_$(date +%Y%m%d).txt
 ```
 
 </details>
@@ -208,7 +208,7 @@ UserWarning: Failed to initialize NumPy: No module named 'numpy'
 ### ③ 나머지 패키지 &nbsp;·&nbsp; `3분 28초`
 
 ```bash
-pip install --cache-dir /home/work/my-code/pip_cache -r requirements_h200.txt
+pip install --cache-dir /home/work/my-code/pip_cache -r requirements/h200/requirements_h200.txt
 ```
 
 여기서 **`pesq` 가 C 확장을 컴파일**합니다 (gcc 필요, 이 머신은 gcc 11.4 있음).
@@ -327,7 +327,7 @@ ALL CHECKS PASSED
 ### ⑦ 환경 박제 &nbsp;·&nbsp; `즉시`
 
 ```bash
-pip freeze --all > h200_pip_freeze_$(date +%Y%m%d).txt
+pip freeze --all > requirements/h200/h200_pip_freeze_$(date +%Y%m%d).txt
 ```
 
 > ⚠️ **`--all` 을 꼭 붙이세요.** 기본 `pip freeze` 는 `setuptools` 를 빼버리는데,
@@ -337,7 +337,7 @@ pip freeze --all > h200_pip_freeze_$(date +%Y%m%d).txt
 > - conda 가 제공한 `packaging` 이 `@ file:///home/conda/...` 로 기록되는데 그 경로가 없어 `OSError` 로 실패
 > - editable 설치인 `tse-eval` 이 `tse-eval==0.1.0` 으로 기록되는데 PyPI 에 없는 이름
 >
-> → **재설치는 항상 `requirements_h200.txt` 로** 하세요. 스냅샷은 "그때 뭐가 깔려 있었나" 대조용입니다.
+> → **재설치는 항상 `requirements/h200/requirements_h200.txt` 로** 하세요. 스냅샷은 "그때 뭐가 깔려 있었나" 대조용입니다.
 
 ---
 
@@ -472,7 +472,7 @@ export HF_HOME=/home/work/my-checkpoints/hf_cache
 | 세 시스템의 DNSMOS 값이 미묘하게 안 맞음 | 일부는 CPU, 일부는 CUDA 로 채점됨 | 각 sidecar 의 `dnsmos.actual_providers` 를 비교하고 같은 설정으로 재채점 (차이 약 3e-3) |
 | 재설치가 너무 느림 (매번 4 GB) | pip 캐시가 꺼져 있음 | 모든 `pip install` 에 `--cache-dir /home/work/my-code/pip_cache` |
 | 다음 세션에 Whisper 를 또 받음 | `HF_HOME` 미설정 → 휘발 영역에 캐시됨 | `export HF_HOME=/home/work/my-checkpoints/hf_cache` |
-| `pip install -r h200_pip_freeze_*.txt` 가 `OSError` | 스냅샷은 설치용이 아님 | `requirements_h200.txt` 로 설치하세요 |
+| `pip install -r h200_pip_freeze_*.txt` 가 `OSError` | 스냅샷은 설치용이 아님 | `requirements/h200/requirements_h200.txt` 로 설치하세요 |
 | Whisper 다운로드가 24 GB 를 받으려 함 | `snapshot_download` 를 직접 호출함 (flax/tf/fp32 샤드 포함) | `scripts/download_models.py` 를 쓰세요 (`from_pretrained` 방식, 3.0 GB) |
 
 ### DNSMOS 속도 (실측)
@@ -523,11 +523,11 @@ export HF_HOME=/home/work/my-checkpoints/hf_cache
 
 | 파일 | 역할 |
 |---|---|
-| `requirements_h200.txt` | **설치의 기준.** H100/H200 용 핀 목록 + 함정 12가지 + 상세 주석 |
-| `requirements.txt` | 구형(A6000 / CPU-only) 기준. H200 에서는 쓰지 않습니다 |
-| `h200_pip_freeze_*.txt` | **진단용 스냅샷.** 설치용 아님 (⑦ 참고) |
+| `requirements/h200/requirements_h200.txt` | **설치의 기준.** H100/H200 용 핀 목록 + 함정 12가지 + 상세 주석 |
+| `requirements/a6000/requirements_a6000.txt` | 구형(A6000 / CPU-only) 기준. H200 에서는 쓰지 않습니다 |
+| `requirements/h200/h200_pip_freeze_*.txt` | **진단용 스냅샷.** 설치용 아님 (⑦ 참고) |
 | `scripts/download_models.py` | ECAPA + Whisper 다운로드 & 검증 |
-| `INSTALL.md` | 이 문서 |
+| `requirements/h200/INSTALL.md` | 이 문서 |
 | `USE_GUIDE.md` | 설치 후 **사용법** (CLI 옵션, 컬럼 자동 인식, FAQ) |
 
 ### 🎚️ 지표별 계산 샘플레이트
@@ -562,8 +562,8 @@ export HF_HOME=/home/work/my-checkpoints/hf_cache
 
 ### 🔗 다음 단계
 
-설치가 끝났으면 **[USE_GUIDE.md](USE_GUIDE.md)** 로 이동하세요.
-논문 숫자를 만들기 전에는 **[CAVEATS.md](CAVEATS.md)** 를 꼭 한 번 보세요
+설치가 끝났으면 **[USE_GUIDE.md](../../USE_GUIDE.md)** 로 이동하세요.
+논문 숫자를 만들기 전에는 **[CAVEATS.md](../../CAVEATS.md)** 를 꼭 한 번 보세요
 (조용히 틀리는 것들 + 재현성 체크리스트).
 
 세 모델의 추론 결과 CSV 는 **추가 옵션 없이 그대로** 채점됩니다:

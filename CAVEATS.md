@@ -1,7 +1,7 @@
 # ⚠️ TSE_Eval 주의사항 (Caveats)
 
 > 이 문서는 **실제로 겪고 실측으로 확인한 것만** 모았습니다. 추측은 없습니다.
-> 설치 절차는 [INSTALL.md](INSTALL.md), 사용법은 [USE_GUIDE.md](USE_GUIDE.md) 를 보세요.
+> 설치 절차는 [requirements/h200/INSTALL.md](requirements/h200/INSTALL.md), 사용법은 [USE_GUIDE.md](USE_GUIDE.md) 를 보세요.
 
 가장 위험한 것은 에러가 나는 문제가 아니라 **에러 없이 조용히 틀린 값을 내는** 문제입니다.
 그래서 §1 을 맨 앞에 뒀습니다. 논문 숫자를 만들기 전에 §1 만이라도 읽으세요.
@@ -28,7 +28,7 @@
 모듈 최상단에서 import 합니다(`speechmos/dnsmos.py:4-6`). 지표 함수는 설계상 예외를 `nan` 으로
 삼키므로, 예전에는 아무 메시지 없이 `dnsmos_sig/bak/ovrl/p808` 이 전 행 `nan` 이 됐습니다.
 
-- **대응(적용됨)**: `requirements.txt` · `requirements_h200.txt` · `pyproject.toml` 모두에
+- **대응(적용됨)**: `requirements/a6000/requirements_a6000.txt` · `requirements/h200/requirements_h200.txt` · `pyproject.toml` 모두에
   `librosa==0.11.0` 을 명시했고, `ImportError` 시 **stderr 경고를 1회 출력**합니다.
 - **확인법**: 결과 CSV 를 받으면 `dnsmos_*` 열이 전부 `nan` 인지 **항상 먼저** 보세요.
 
@@ -409,14 +409,14 @@ pip install --cache-dir /home/work/my-code/pip_cache ...
 
 ## 5. 📦 설치·의존성
 
-### 5-1. `h200_pip_freeze_*.txt` 는 그대로 설치할 수 없습니다
+### 5-1. `requirements/h200/h200_pip_freeze_*.txt` 는 그대로 설치할 수 없습니다
 
 진단용 스냅샷입니다. 두 가지 이유로 `pip install -r` 이 실패합니다(실측):
 
 1. conda 가 제공한 `packaging` 이 `@ file:///home/conda/...` 로 기록되고 그 경로는 없음 → `OSError`
 2. editable 설치인 `tse-eval` 이 `tse-eval==0.1.0` 으로 기록됨 → PyPI 에 없는 이름
 
-→ **재설치는 항상 `requirements_h200.txt` + `pip install -e '.[test]'`.**
+→ **재설치는 항상 `requirements/h200/requirements_h200.txt` + `pip install -e '.[test]'`.**
 스냅샷은 `pip freeze --all` 로 뽑습니다(`--all` 이 없으면 **`setuptools` 가 빠지는데**
 `setuptools<81` 은 중요한 핀이라 반드시 보여야 합니다).
 
@@ -433,7 +433,7 @@ pip install --cache-dir /home/work/my-code/pip_cache ...
 extra 로 분리했습니다:
 
 ```bash
-pip install -e '.[test]'        # H100/H200 (onnxruntime-gpu 는 requirements_h200.txt 가 담당)
+pip install -e '.[test]'        # H100/H200 (onnxruntime-gpu 는 requirements/h200/requirements_h200.txt 가 담당)
 pip install -e '.[cpu,test]'    # 그 외
 ```
 

@@ -29,7 +29,7 @@ docstring: "SI-SDR/SI-SDRi/ESTOI = native 24k, PESQ = 16k"):
     wer                    16 kHz        Whisper feature extractor rejects other rates
     spk_sim                16 kHz        ECAPA is 16 kHz and does NOT resample —
                                          a 24 kHz input silently yields wrong
-                                         embeddings (requirements_h200.txt [B-9])
+                                         embeddings (requirements/h200/requirements_h200.txt [B-9])
 
 All resampling goes through :func:`tse_eval.audio.resample_np` — the single
 conversion point.  ``mix`` is never resampled: no 16 kHz metric consumes it.
@@ -536,7 +536,7 @@ def spk_sim(est16k: np.ndarray, ref16k: np.ndarray) -> float:
 
     Both inputs must already be at 16 kHz. ECAPA is a 16 kHz model and
     ``encode_batch`` does **not** resample, so feeding 24 kHz audio silently
-    produces wrong embeddings (requirements_h200.txt [B-9]) — hence the rate is
+    produces wrong embeddings (requirements/h200/requirements_h200.txt [B-9]) — hence the rate is
     the caller's responsibility and is enforced by the sample-rate policy.
 
     Returns the cosine in [-1, 1], or ``nan`` on failure / too-short input.

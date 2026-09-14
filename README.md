@@ -111,10 +111,10 @@ LLM-TSE 실측 영향: `dnsmos_ovrl` 2.55 → **2.91**, micro-WER 0.593 → **0.
 
 | 환경 | 방법 |
 |---|---|
-| **NVIDIA H100 / H200** | 👉 **[INSTALL.md](INSTALL.md)** 를 따라가세요 (`requirements_h200.txt` 기준, 단계별 안내) |
-| 그 외 / CPU only | `pip install -r requirements.txt` + `pip install librosa==0.11.0` |
+| **NVIDIA H100 / H200** | 👉 **[requirements/h200/INSTALL.md](requirements/h200/INSTALL.md)** 를 따라가세요 (`requirements/h200/requirements_h200.txt` 기준, 단계별 안내) |
+| 그 외 / CPU only | `pip install -r requirements/a6000/requirements_a6000.txt` + `pip install librosa==0.11.0` |
 
-> ⚠️ `requirements.txt` 는 A6000/CPU 시절 파일이라 **`librosa` 가 빠져 있습니다.**
+> ⚠️ `requirements/a6000/requirements_a6000.txt` 는 A6000/CPU 시절 파일이라 **`librosa` 가 빠져 있습니다.**
 > `librosa` 없이 돌리면 `speechmos` 가 내부에서 그것을 import 하지 못해
 > **DNSMOS 4개 열이 에러 없이 전부 `nan`** 이 됩니다. 꼭 같이 설치하세요.
 
@@ -239,8 +239,8 @@ row = compute_row_metrics(est, ref, mix, sr=24000)   # dict
 | numpy | 1.26.4 (`<2`) |
 
 `pesq`, `pystoi`, `speechmos`, `librosa`, `onnxruntime`, `pandas`, `soundfile` —
-전체 핀은 **H100/H200** 은 [`requirements_h200.txt`](requirements_h200.txt),
-그 외는 [`requirements.txt`](requirements.txt) 참고.
+전체 핀은 **H100/H200** 은 [`requirements/h200/requirements_h200.txt`](requirements/h200/requirements_h200.txt),
+그 외는 [`requirements/a6000/requirements_a6000.txt`](requirements/a6000/requirements_a6000.txt) 참고.
 
 > **CPU만 있어도 동작**합니다. GPU 는 필수가 아닙니다(DNSMOS ONNX 는 CPU 추론).
 > Speaker Similarity / WER 확장 지표를 쓸 때만 GPU 가 도움이 됩니다.
@@ -265,9 +265,9 @@ tse_eval/
 │   └── download_models.py   # 확장 지표용 모델(ECAPA/Whisper) 다운로드 + 검증
 ├── examples/            # 합성 예제 생성기 + sample_input.csv
 ├── tests/               # pytest (합성 신호, CPU only)
-├── requirements.txt         # A6000 / CPU 기준 (★ librosa 없음)
-├── requirements_h200.txt    # H100/H200 기준 — 함정 12가지 주석 포함
-├── INSTALL.md               # 설치 가이드 (단계별, 문제 해결)
+├── requirements/
+│   ├── h200/                # H100/H200 — requirements_h200.txt · INSTALL.md · pip freeze 스냅샷
+│   └── a6000/               # RTX A6000 — requirements_a6000.txt
 ├── USE_GUIDE.md             # 사용법 (CLI 옵션, 컬럼 인식, FAQ)
 ├── CAVEATS.md               # ⚠️ 주의사항 — 조용히 틀리는 것들, 재현성 체크리스트
 └── README.md
