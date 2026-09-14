@@ -10,7 +10,7 @@
 | 🖥️ **대상 환경** | NVIDIA H100 / H200 (Hopper, sm_90) · Ubuntu 22.04 · Python 3.10.20 |
 | ⏱️ **총 소요 시간** | 약 **6분** (+ 모델 다운로드 3.1 GB) |
 | 💾 **필요 디스크** | env 약 7 GB + 모델 3.0 GB + pip 캐시 3.2 GB ≈ **13 GB** |
-| ✅ **검증 상태** | 2026-08-06 이 머신에서 **처음부터 완주 재검증** (110 패키지 · `pip check` 클린 · 테스트 83 passed · `ALL CHECKS PASSED`) |
+| ✅ **검증 상태** | 2026-09-14 이 머신에서 임시 env 로 **이 문서 그대로 처음부터 완주 재검증** (111 패키지 · `pip check` 클린 · `verify_h200_env.py --full` PASS 48/48 · 테스트 105 passed, 1 skipped · 예제 DNSMOS nan 0 / CUDA EP) |
 
 </div>
 
@@ -59,6 +59,9 @@ pip install --cache-dir /home/work/my-code/pip_cache -e '.[test]'
 # ⑤⑥ 모델 다운로드
 export HF_HOME=/home/work/my-checkpoints/hf_cache
 python scripts/download_models.py
+
+# 검증 (마지막 줄이 "✅ 설치가 올바릅니다." 여야 함)
+python requirements/h200/verify_h200_env.py --full
 
 # ⑦ 박제
 pip freeze --all > requirements/h200/h200_pip_freeze_$(date +%Y%m%d).txt
@@ -239,12 +242,14 @@ pip install --cache-dir /home/work/my-code/pip_cache -e '.[test]'
 `[test]` extra 는 **pytest + asteroid** 를 함께 깝니다 — asteroid 는 SI-SDR 값이
 표준 구현과 일치하는지 검증하는 **오라클**로만 쓰이고, 실제 채점은 더 빠른 `native`
 백엔드가 담당합니다. 없이 설치하려면 `-e .` 만 쓰면 되고, 그 경우 등가성 테스트 2건이 skip 됩니다.
+단 **`scripts/eval_*.sh` 래퍼는 기본 백엔드가 `asteroid`** 라서 `-e .` 만 깔면 선행 검사에서 멈춥니다
+(`BACKEND=native` 로 우회 가능). 그래서 이 문서는 `[test]` 를 표준으로 둡니다.
 
 > 💡 **CPU용 `onnxruntime` 은 일부러 기본 의존성이 아닙니다.**
 > CPU/GPU 빌드는 별개 배포본이라 둘이 같이 깔리면 충돌합니다. ③에서 깐
 > `onnxruntime-gpu` 가 그대로 유지되도록 extra 로 분리해 뒀습니다
 > (예전에는 `--no-deps` 로 우회했고 `pip check` 경고가 계속 떴습니다).
-> H200 아닌 환경은 `pip install -e '.[cpu,test]'` 를 쓰세요.
+> GPU 가 없는 CPU 전용 환경만 `pip install -e '.[cpu,test]'` 를 쓰세요 (RTX A6000 은 [A6000 가이드](../a6000/INSTALL.md)).
 
 **확인** — 한 줄만 나와야 하고, `pip check` 가 깨끗해야 합니다:
 
@@ -343,7 +348,111 @@ pip freeze --all > requirements/h200/h200_pip_freeze_$(date +%Y%m%d).txt
 
 ## 4. 설치가 잘 됐는지 확인하기
 
-### ✅ 검증 1 — 스택 확인 (가장 중요)
+순서대로 **검증 1 → 2 → 3** 을 하면 됩니다. 검증 1 하나로 설치 문제는 거의 다 잡힙니다.
+
+### ✅ 검증 1 — 자동 검증 스크립트 (가장 중요) &nbsp;·&nbsp; `약 30초`
+
+```bash
+cd /home/work/my-code/TSE_Eval
+export HF_HOME=/home/work/my-checkpoints/hf_cache
+python requirements/h200/verify_h200_env.py --full
+```
+
+마지막 줄이 **`✅ 설치가 올바릅니다.`** 이고 종료코드가 0 이면 통과입니다
+(FAIL 이 하나라도 있으면 `❌` 와 함께 종료코드 1).
+
+**옵션**
+
+| 옵션 | 언제 | 하는 일 |
+|---|---|---|
+| (없음) | 평소 | 1~5절 전체 (모델 캐시는 **파일 존재만** 확인) |
+| `--full` | 설치 직후 · 논문 채점 전 | + ECAPA·Whisper 를 **캐시만으로(`HF_HUB_OFFLINE=1`)** 실제 로드해 `spk_sim`·`wer` 계산 |
+| `--skip-models` | ⑥ 모델 다운로드 **전** | HF_HOME·모델 캐시 검사 생략 |
+| `--skip-gpu` | GPU 없는 노드 | GPU 검사 생략, DNSMOS 는 CPU 로 확인 |
+| `--allow-other-gpu` | 스크립트 자체 점검 | GPU 모델이 H100/H200 이 아니어도 FAIL 대신 WARN |
+
+**무엇을 확인하나**
+
+| 절 | 항목 | 이게 틀리면 |
+|---|---|---|
+| 1. Python · env | Python 3.10.20 · env 가 `/home/work/my-code/` 안 | 세션 종료 시 env 증발 |
+| 2. GPU · PyTorch | torch `2.5.1+cu121` · driver ≥ 535 · **sm_90** · capability (9,0) · bf16 연산 | cu121 아닌 torch → ② 재설치 |
+| 3. 패키지 | `requirements_h200.txt` 23개 핀 전부 · **onnxruntime 배포본 1개** · numpy<2 · setuptools<81 · `pip check` · `librosa`/`speechmos` import · editable 설치 · asteroid 백엔드 | DNSMOS 전부 `nan` · 래퍼가 첫 행에서 멈춤 |
+| 4. 지표 | SI-SDR native≡asteroid(<1e-6) · STOI/ESTOI/PESQ 유한값 · **DNSMOS 가 실제로 `CUDAExecutionProvider` 로 도는지** | DNSMOS 가 조용히 CPU 로 폴백 |
+| 5. 모델 캐시 · CLI | `HF_HOME` 영속 경로 · `embedding_model.ckpt` · `model.safetensors` · `.incomplete` 없음 · `python -m tse_eval --help` | 채점 2시간 지점에서 3 GB 재다운로드 |
+| 6. `--full` | ECAPA self-cosine ≈ 1 · Whisper bf16 전사 | 모델 로드 실패 |
+
+<details>
+<summary>정상 출력 (2026-09-14, 이 H200 · 발췌)</summary>
+
+```
+TSE_Eval 설치 검증 — H100 / H200 (Hopper)  (repo: /home/work/my-code/TSE_Eval)
+
+── 2. GPU · PyTorch ────────────────────────────────────────────
+  [PASS] torch / torchaudio 빌드              torch 2.5.1+cu121 · torchaudio 2.5.1+cu121 · cuda 12.1
+  [PASS] nvidia-smi                         NVIDIA H200 · driver 580.126.20 · 143771 MiB
+  [PASS] CUDA arch (sm_90)                  NVIDIA H200 · capability (9, 0) · arch_list 에 sm_90 포함
+── 3. 패키지 ──────────────────────────────────────────────────────
+  (대조 기준: requirements/h200/requirements_h200.txt · 23개 패키지)
+  [PASS] pkg onnxruntime-gpu                1.20.2 ⊨ >=1.19.2,<1.21
+  [PASS] onnxruntime 배포본 1개                 onnxruntime-gpu 1.20.2 한 줄만 설치됨
+  [PASS] pip check                          No broken requirements found.
+  ...
+── 4. 지표 (합성 신호) ───────────────────────────────────────────────
+  [PASS] SI-SDR native ≡ asteroid           SI-SDR 14.85 dB · SI-SDRi 20.01 dB · |native−asteroid| 9.1e-13
+  [PASS] DNSMOS 값 · 실제 EP                   sig 1.39 · bak 2.70 · ovrl 1.19 · p808 2.30 · EP ['CUDAExecutionProvider', 'CPUExecutionProvider']
+── 5. 모델 캐시 · CLI ──────────────────────────────────────────────
+  [PASS] whisper-large-v3                   model.safetensors 3,087 MB
+── 6. 모델 로드·추론 (--full) ────────────────────────────────────────
+  [PASS] Speaker Similarity (ECAPA)         ECAPA on cuda · 같은 신호 cos = 1.0000 (기대 ≈ 1)
+  [PASS] WER (Whisper large-v3)             Whisper on cuda (torch.bfloat16) · wer 1.00 · hyp 'Bye.'
+
+════════════════════════════════════════════════════════════════
+  결과: PASS 48 · WARN 0 · FAIL 0 · SKIP 0
+  ✅ 설치가 올바릅니다.
+════════════════════════════════════════════════════════════════
+```
+
+WER 값 자체(합성 신호라 1.00)는 의미가 없습니다 — 모델이 로드되고 전사가 끝까지 도는지만 봅니다.
+Whisper 가 찍는 `forced_decoder_ids` · `attention mask` 경고는 무해합니다.
+</details>
+
+> 🔎 **DNSMOS 검사는 별도 프로세스에서 돕니다.** 같은 프로세스에서 torch 가 먼저 cuDNN 을
+> 올리면(CUDA conv 등) onnxruntime-gpu 의 CUDA EP 가
+> `libcudnn_ops.so.9: undefined symbol ...` 로 로드에 실패하고 **경고만 찍은 채 CPU 로 폴백**합니다
+> (2026-09-14 이 H200 에서 재현). `tse_eval` 은 DNSMOS 세션을 ECAPA/Whisper 보다 먼저 만들어
+> 이 순서를 피하므로 실제 채점은 CUDA 로 돕니다 — 검증도 그 순서를 그대로 재현합니다.
+>
+> 참고로 이 H200 의 기본 상태에서 onnxruntime 은 **torch 번들 `libcudnn.so.9`(9.1) + 시스템 cuDNN 9.4 의
+> 하위 라이브러리**를 섞어 로드합니다(`/proc/self/maps` 로 확인, 2026-09-14). torch 번들 경로를
+> `LD_LIBRARY_PATH` 앞에 두면 9.1 로 통일되고 위 순서 문제도 사라지지만, 지금까지의 채점과 실행 환경이
+> 달라지므로 기본 절차에는 넣지 않았습니다. 방법은 [A6000 가이드 §5.2](../a6000/INSTALL.md#52-dnsmos-가-cpu-로-돎--cuda-ep-로드-실패).
+
+### ✅ 검증 2 — 테스트 스위트 &nbsp;·&nbsp; `약 90초`
+
+```bash
+cd /home/work/my-code/TSE_Eval && pytest -q
+```
+
+```
+105 passed, 1 skipped, 2 warnings in 90s
+```
+
+> ❗ `dnsmos` 관련 테스트가 실패하면 **`librosa` 누락**입니다 → `pip install librosa==0.11.0`
+
+### ✅ 검증 3 — 합성 예제로 처음부터 끝까지
+
+```bash
+python examples/make_example.py
+python -m tse_eval -i examples/sample_input.csv -o examples/results.csv
+```
+
+`dnsmos_*` 4개 열이 **전부 `nan` 이 아니어야** 하고, 콘솔에
+`[tse-eval] DNSMOS ONNX providers: ['CUDAExecutionProvider', 'CPUExecutionProvider'] (intra_op=4)` 가 찍혀야 합니다.
+같은 값이 결과 옆 `examples/results_config.json` 의 `dnsmos.actual_providers` 에도 남습니다.
+
+<details>
+<summary>(참고) 스크립트 없이 손으로 확인하기</summary>
 
 ```bash
 python - <<'PY'
@@ -358,86 +467,12 @@ print("speechbrain:", speechbrain.__version__, "| librosa", librosa.__version__)
 print("transformers:", transformers.__version__, "| accelerate", accelerate.__version__)
 print("jiwer      :", version("jiwer"))                  # jiwer 엔 __version__ 이 없음
 print("numpy      :", numpy.__version__, "| setuptools", version("setuptools"))
-print("OK")
 PY
 ```
 
-**기대 출력**
-
-```
-torch      : 2.5.1+cu121 | cuda 12.1
-arch_list  : ['sm_50', 'sm_60', 'sm_70', 'sm_75', 'sm_80', 'sm_86', 'sm_90']
-gpu        : NVIDIA H200 (9, 0)
-ort avail  : ['TensorrtExecutionProvider', 'CUDAExecutionProvider', 'CPUExecutionProvider']
-speechbrain: 1.0.3 | librosa 0.11.0
-transformers: 4.46.3 | accelerate 1.10.0
-jiwer      : 3.1.0
-numpy      : 1.26.4 | setuptools 80.10.2
-OK
-```
-
-| 확인할 것 | 왜 |
-|---|---|
-| `arch_list` 에 **`sm_90`** | 없으면 cu121 휠이 아닌 게 깔린 것 → ②를 `--force-reinstall` 로 다시 |
-| **`CUDAExecutionProvider`** | 없으면 DNSMOS 가 CPU 로 돕니다 (아래 검증 2) |
-| **`librosa`** 임포트 성공 | 없으면 DNSMOS 4열이 **조용히 전부 `nan`** 이 됩니다 |
-| `setuptools` **81 미만** | 형제 repo 와 동일 계열 유지 |
-
-### ✅ 검증 2 — 테스트 스위트
-
-```bash
-cd /home/work/my-code/TSE_Eval && pytest -q
-```
-
-```
-35 passed, 2 warnings in 22s
-```
-
-> ❗ `dnsmos` 관련 2개가 실패하면 **`librosa` 누락**입니다 → `pip install librosa==0.11.0`
-
-### ✅ 검증 3 — 합성 예제로 처음부터 끝까지
-
-```bash
-python examples/make_example.py
-python -m tse_eval -i examples/sample_input.csv -o examples/results.csv
-```
-
-`dnsmos_*` 4개 열이 **전부 `nan` 이 아니어야** 합니다.
-
-### ✅ 검증 4 — DNSMOS 가 실제로 GPU 를 쓰는지
-
-`onnxruntime-gpu` 를 깔았어도 **DNSMOS 는 지금 CPU 로 돕니다.** 직접 확인해 보세요.
-
-```bash
-python - <<'PY'
-import numpy as np, onnxruntime as ort
-orig = ort.InferenceSession
-def probe(*a, **k):
-    s = orig(*a, **k); print("EP in use:", s.get_providers()); return s
-ort.InferenceSession = probe
-from speechmos import dnsmos
-print(dnsmos.run((np.random.randn(16000)*0.05).astype(np.float32), sr=16000))
-PY
-```
-
-**기대 출력** — `CPUExecutionProvider` 가 나오는 것이 **정상입니다**:
-
-```
-EP in use: ['CPUExecutionProvider']
-EP in use: ['CPUExecutionProvider']
-{'ovrl_mos': 1.10..., 'sig_mos': 1.21..., 'bak_mos': 1.18..., 'p808_mos': 2.09...}
-```
-
-> 🤔 **왜 GPU 를 안 쓰나요? 고장인가요?** 아닙니다.
-> `speechmos` 가 세션을 만들 때 `providers` 를 넘기지 않는데,
-> onnxruntime 1.9+ 는 **`providers` 미지정 시 CPU EP 만** 씁니다. 즉 CUDA 를 **시도조차 하지 않습니다.**
-> CUDA 자체는 정상입니다 — 명시하면 바로 붙습니다:
-> ```
-> ort.InferenceSession(model)                           → ['CPUExecutionProvider']
-> ort.InferenceSession(model, providers=['CUDA...'])    → ['CUDAExecutionProvider', 'CPU...']
-> ```
-> 그래서 지금 `onnxruntime-gpu` 핀은 **"나중을 위한 준비"** 이고, 실제 가속에는 코드 수정이
-> 필요합니다 → [§6 DNSMOS 속도](#dnsmos-속도-실측) 와 [§7 후속 작업](#-후속-작업-아직-미구현) 참고.
+`ort avail` 에 `CUDAExecutionProvider` 가 **보인다고 실제로 CUDA 로 도는 것은 아닙니다** —
+위 폴백 때문에 반드시 검증 1 이나 검증 3 의 `actual_providers` 로 확인하세요.
+</details>
 
 ---
 
@@ -451,6 +486,7 @@ export HF_HOME=/home/work/my-checkpoints/hf_cache
 ```
 
 이 2줄이면 끝입니다. 환경변수를 더 설정할 필요는 없습니다.
+세션 시작 때 한 번 확인하고 싶으면 `python requirements/h200/verify_h200_env.py` (약 25초).
 
 > 💡 대량 평가가 느리게 느껴지면 [§6 DNSMOS 속도](#dnsmos-속도-실측) 를 보세요.
 > (`OMP_NUM_THREADS` 를 만지는 것은 **효과가 없습니다** — 실측으로 확인했습니다.)
@@ -463,7 +499,8 @@ export HF_HOME=/home/work/my-checkpoints/hf_cache
 |---|---|---|
 | `ModuleNotFoundError: No module named 'urllib'` | 설치 중 다른 터미널에서 conda 명령이 겹쳐 **env 가 사라짐** | ⓪부터 다시. 설치 중엔 다른 터미널에서 conda 를 만지지 마세요 |
 | `ERROR: ... tse-eval 0.1.0 requires onnxruntime` (③단계) | repo 의 **`tse_eval.egg-info` 잔여물** 을 pip 이 오인 | `rm -rf tse_eval.egg-info build` 후 재시도. 무해하니 무시해도 됩니다 |
-| `pip check` 가 같은 메시지를 계속 냄 (설치 완료 후) | `pyproject.toml` 이 CPU `onnxruntime` 을 선언하는데 우리는 `onnxruntime-gpu` 사용 | **정상입니다.** 이 환경에선 항상 뜨는 경고 한 줄 |
+| DNSMOS 가 CPU 로 돎 + `libcudnn_ops.so.9: undefined symbol` 경고 | 같은 프로세스에서 torch 가 cuDNN 을 **먼저** 올림 → onnxruntime CUDA EP 로드 실패 후 CPU 폴백 | `tse_eval` CLI·래퍼는 해당 없음. 직접 코드를 짤 때는 DNSMOS(ONNX) 세션을 torch CUDA 연산보다 먼저 만드세요 |
+| `pip list` 에 onnxruntime 이 두 줄 | CPU `onnxruntime` 과 `onnxruntime-gpu` 공존 (`.[cpu]` extra 를 깔았음) | `pip uninstall -y onnxruntime onnxruntime-gpu` → ③ 재실행 → `pip install -e '.[test]'` |
 | `dnsmos_*` 4열이 전부 `nan` | **`librosa` 누락.** `speechmos` 가 의존성을 선언하지 않는데 내부에서 `librosa` 를 import 하고, 지표 함수가 예외를 `nan` 으로 삼킴 | `pip install librosa==0.11.0` |
 | `arch_list` 에 `sm_90` 없음 | cu121 아닌 torch 가 깔림 | `pip install --force-reinstall torch==2.5.1+cu121 torchaudio==2.5.1+cu121 --index-url https://download.pytorch.org/whl/cu121` |
 | DNSMOS 가 느림 | 가속이 안 걸렸을 수 있음 | sidecar 의 `dnsmos.actual_providers` 확인. `CUDAExecutionProvider` 가 없으면 아래 [DNSMOS 속도](#dnsmos-속도-실측) 참고 |
@@ -524,7 +561,8 @@ export HF_HOME=/home/work/my-checkpoints/hf_cache
 | 파일 | 역할 |
 |---|---|
 | `requirements/h200/requirements_h200.txt` | **설치의 기준.** H100/H200 용 핀 목록 + 함정 12가지 + 상세 주석 |
-| `requirements/a6000/requirements_a6000.txt` | 구형(A6000 / CPU-only) 기준. H200 에서는 쓰지 않습니다 |
+| `requirements/h200/verify_h200_env.py` | **설치 검증 스크립트** (§4 검증 1) |
+| `requirements/a6000/` | RTX A6000 용 가이드·requirements·검증 스크립트. 패키지 핀은 H200 과 동일 |
 | `requirements/h200/h200_pip_freeze_*.txt` | **진단용 스냅샷.** 설치용 아님 (⑦ 참고) |
 | `scripts/download_models.py` | ECAPA + Whisper 다운로드 & 검증 |
 | `requirements/h200/INSTALL.md` | 이 문서 |
@@ -546,7 +584,7 @@ export HF_HOME=/home/work/my-checkpoints/hf_cache
 이 프로토콜은 형제 프로젝트(TPEX / LLM-TSE / StyleTSE)의 `eval.py` 와 동일하므로,
 같은 오디오에 대해 **같은 숫자**가 나옵니다.
 
-### 🚧 후속 작업 (아직 미구현)
+### ✅ 이전 판의 후속 작업 — 모두 반영됨
 
 이전 판에 적어둔 개선점 4가지는 **모두 반영되었습니다**:
 
@@ -557,8 +595,8 @@ export HF_HOME=/home/work/my-checkpoints/hf_cache
 | 3 | Speaker Similarity / WER 지표 | ✅ 구현 완료. spk_sim 은 기본 on, wer 는 opt-in |
 | 4 | `pyproject.toml` 의 CPU `onnxruntime` 정리 | ✅ extra 로 분리 → `pip check` 클린 |
 
-남은 것은 **세 프로젝트 `inference.py` 실행**뿐입니다(매니페스트가 아직 없어 실데이터
-채점과 형제 `eval.py` 숫자 대조를 못 한 상태). SDR/SIR/SAR 은 의도적으로 미구현입니다.
+LLM-TSE · StyleTSE 실데이터 채점 결과는 [exp_reports/](../../exp_reports/README.md) 에 있습니다.
+SDR/SIR/SAR 은 의도적으로 미구현입니다.
 
 ### 🔗 다음 단계
 
@@ -573,5 +611,7 @@ python -m tse_eval -i <manifest>.csv -o <out>.csv --model-name tpex \
     --group-by overlap_ratio,prompt_category,same_gender,first_speak
 ```
 
-> TPEX / LLM-TSE / StyleTSE 매니페스트 모두 추출 오디오 경로를 `pred_path` 컬럼에 쓰는데,
-> 현재 자동 인식 후보에 그 이름이 없어서 `--est-col pred_path` 를 붙여야 합니다.
+> TPEX / LLM-TSE / StyleTSE 매니페스트는 추출 오디오 경로를 `pred_path` 컬럼에 쓰며,
+> 이 이름은 자동 인식 후보에 들어 있어 `--est-col` 을 따로 줄 필요가 없습니다.
+> 프로젝트별 표준 채점은 `bash scripts/eval_llmtse.sh` · `bash scripts/eval_styletse.sh` 를 쓰세요
+> (`--check-only` 로 선행 검사만).
