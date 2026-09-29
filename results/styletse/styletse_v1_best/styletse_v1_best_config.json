@@ -1,0 +1,126 @@
+{
+  "input_csv": "/home/work/my-outputs/styletse/styletse_v1_best/manifest.csv",
+  "output_csv": "/home/work/my-outputs/styletse/styletse_v1_best/eval/styletse_v1_best.csv",
+  "model_name": "styletse_v1_best",
+  "target_sr": 24000,
+  "si_sdr_backend": "asteroid",
+  "metrics": [
+    "dnsmos_bak",
+    "dnsmos_bak_clipped",
+    "dnsmos_ovrl",
+    "dnsmos_ovrl_clipped",
+    "dnsmos_p808",
+    "dnsmos_p808_clipped",
+    "dnsmos_sig",
+    "dnsmos_sig_clipped",
+    "estoi",
+    "input_si_sdr",
+    "input_si_sdr_pairwise",
+    "pesq",
+    "si_sdr",
+    "si_sdri",
+    "spk_sim",
+    "stoi",
+    "wer",
+    "wer_raw"
+  ],
+  "metrics_requested": [
+    "dnsmos_bak",
+    "dnsmos_ovrl",
+    "dnsmos_p808",
+    "dnsmos_sig",
+    "estoi",
+    "input_si_sdr",
+    "input_si_sdr_pairwise",
+    "pesq",
+    "si_sdr",
+    "si_sdri",
+    "spk_sim",
+    "stoi",
+    "wer"
+  ],
+  "config_file": "/home/work/my-code/TSE_Eval/configs/config.yaml",
+  "wer": {
+    "model_id": "openai/whisper-large-v3",
+    "language": "en",
+    "normalize": "whisper_english"
+  },
+  "spk_sim": {
+    "model_id": "speechbrain/spkrec-ecapa-voxceleb"
+  },
+  "n_rows": 5000,
+  "source_join": null,
+  "columns": {
+    "id": "file_id",
+    "est": "pred_path",
+    "ref": "target_path",
+    "mix": "mixed_path",
+    "ovr": "overlap_ratio",
+    "itf": "interference_path",
+    "txt": "target_sentence"
+  },
+  "derived_axes": [
+    "same_gender"
+  ],
+  "dnsmos": {
+    "configured": true,
+    "intra_op_threads": 4,
+    "requested_providers": [
+      "CUDAExecutionProvider",
+      "CPUExecutionProvider"
+    ],
+    "actual_providers": [
+      "CUDAExecutionProvider",
+      "CPUExecutionProvider"
+    ],
+    "normalize": "rms_-26dbov"
+  },
+  "group_by": [
+    "overlap_ratio",
+    "prompt_category",
+    "same_gender",
+    "first_speak"
+  ],
+  "group_by_missing": [],
+  "sample_rate_policy": {
+    "si_sdr": "native",
+    "si_sdri": "native",
+    "input_si_sdr": "native",
+    "input_si_sdr_pairwise": "native",
+    "stoi": "native",
+    "estoi": "native",
+    "pesq": 16000,
+    "dnsmos_sig": 16000,
+    "dnsmos_bak": 16000,
+    "dnsmos_ovrl": 16000,
+    "dnsmos_p808": 16000,
+    "wer": 16000,
+    "spk_sim": 16000,
+    "dnsmos_sig_clipped": 16000,
+    "dnsmos_bak_clipped": 16000,
+    "dnsmos_ovrl_clipped": 16000,
+    "dnsmos_p808_clipped": 16000,
+    "wer_raw": 16000
+  },
+  "environment": {
+    "python": "3.10.20",
+    "platform": "Linux-6.8.0-100-generic-x86_64-with-glibc2.35",
+    "packages": {
+      "numpy": "1.26.4",
+      "scipy": "1.15.3",
+      "pandas": "2.3.1",
+      "torch": "2.5.1+cu121",
+      "torchaudio": "2.5.1+cu121",
+      "pesq": "0.0.4",
+      "pystoi": "0.4.1",
+      "speechmos": "0.0.1.1",
+      "librosa": "0.11.0",
+      "onnxruntime-gpu": "1.20.2",
+      "speechbrain": "1.0.3",
+      "transformers": "4.46.3",
+      "jiwer": "3.1.0",
+      "asteroid": "0.7.0",
+      "tse-eval": "0.1.0"
+    }
+  }
+}

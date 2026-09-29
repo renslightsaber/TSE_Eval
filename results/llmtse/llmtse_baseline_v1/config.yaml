@@ -1,0 +1,107 @@
+# =============================================================================
+# config.yaml — LLM-TSE baseline canonical 설정
+# =============================================================================
+# data / eval / loader / model / optim / training / logging 를 한 곳에 고정한다.
+# train.py · eval.py · notebook 이 이 값을 읽어 사용한다.
+#
+# ★ return_enroll: false  → text-only 공정비교 고정 (train·eval 동일).
+# ★ 하이퍼파라미터 = 논문(arXiv:2310.07284) 정렬 (팀원 코드와 다른 이유: docs/guides/training_guide.md).
+# =============================================================================
+
+seed: 2026
+
+data:
+  root: /home/work/my-datasets/porte_v3_clean   # env PORTE_V3_ROOT 로 override 가능
+  variant: clean            # clean | noisy
+  sample_rate: 24000        # PORTE-v3 native, resample 금지 (불일치 시 ValueError)
+  # ★ 학습 segment 정책 (현재 = 교수님 방식: random crop 6초)
+  #   근거: LLM-TSE 논문 6초 + llmtse 팀원 코드(conf.yml) 6.0초 일치. 6.0*24000=144000 샘플.
+  #   ⚠️ 추후 논의로 변경 가능. random crop은 PORTE 0% overlap에서 target을 놓칠 수 있음
+  #      (0%-overlap의 ~41%가 target_start>6초) → 대안: crop_mode: target_aware(≥10초) 또는
+  #      segment_train: null(full-length). 상세/트레이드오프: docs/guides/training_segment_policy.md
+  segment_train: 6.0        # ★ 학습 random crop 6초 (교수님 방식). null=full-length, 숫자=crop
+  crop_mode: random         # ★ random(교수님 방식). 대안: target_aware(target 전구간 포함, ≥10초 권장)
+  segment_eval: null        # 평가: full-length (chunk-slide는 eval.mode로 옵션)
+  return_enroll: false      # ★ text-only 고정 (train·eval 통일)
+  task: text-only           # inference 매니페스트 task 컬럼 값 (styletse test task와 정렬)
+  # split → CSV 파일명 규약: porte_v3_{variant}_{split}.csv
+  csv:
+    train: porte_v3_clean_train.csv
+    dev:   porte_v3_clean_dev.csv
+    test:  porte_v3_clean_test.csv
+
+# ★ 평가(추론) 긴 오디오 처리 방식 (test.py가 소비 예정 — 아직 미구현)
+eval:
+  mode: full_length         # full_length | chunk_slide  (기본 full_length)
+                            #   full_length: 전체를 1회 forward(권장, PORTE≤19.2초는 VRAM OK)
+                            #   chunk_slide: 겹침 overlap-add(저VRAM/초장문 fallback) — chunked_inference.py
+  chunk_seconds: 5.0        # chunk_slide일 때만 (팀원 기본 5초/1초)
+  overlap_seconds: 1.0
+
+loader:
+  batch_size: 8             # ★ 6초 crop 기준(고정 144000 샘플). H100=8~ / H200=16+.
+                            #   full-length로 바꾸면 낮춰야 함. VRAM: docs/guides/vram_requirements.md
+  num_workers: 4
+  pin_memory: true
+  drop_last: true           # 학습 loader에만 적용(평가 loader는 항상 false)
+
+# =============================================================================
+# 모델 (LLM-TSE = TD-SpeakerBeam 백본 + LLaMA-2/LoRA 텍스트 인코더 + ConcatFusion)
+# =============================================================================
+model:
+  text_model: ckpt/llama_2_7b_chat            # 로컬 다운로드본(재다운로드·토큰 불요). HF repo id도 가능
+                                              # ★ 상대경로는 train.resolve_text_model()이 **repo 루트 기준**으로
+                                              #   해석하므로 어느 cwd에서 실행해도 동작한다(HF repo id는 그대로 통과).
+  use_lora: true
+  lora_r: 16
+  lora_alpha: 16            # ★ 논문 = 16 (팀원 코드는 32였음 — 미정렬 잔재)
+  load_in_4bit: false       # ★ 통짜 bf16 (양자화 미사용). 향후 8-bit 양자화 시 true + text_encoder 주석 참고
+  fusion_type: concat       # text-only 학습에선 fusion 미호출(z=e_txt)
+  n_src: 2                  # ⚠️ 참고값(코드 미사용). TimeDomainSpeakerBeam에는 n_src 파라미터가 없고
+                            #    백본 TDConvNetInformed가 내부에서 n_src=1(단일 출력)로 고정한다.
+                            #    예전 코드는 이 값을 masknet에 주입했으나 **fb_kwargs로 흘러 무시됐다(B4).
+  filterbank: { n_filters: 512, kernel_size: 16, stride: 8 }        # free filterbank
+  masknet:    { n_blocks: 8, n_repeats: 3, mask_act: relu, bn_chan: 128, skip_chan: 128, hid_chan: 512 }
+  enroll:     { i_adapt_layer: 7, adapt_layer_type: mul, adapt_enroll_dim: 128 }   # spk_dim = 128*2 = 256
+
+# =============================================================================
+# Optimizer / Scheduler (★ 논문 arXiv:2310.07284 정렬)
+# =============================================================================
+optim:
+  optimizer: adamw          # ★ 논문 = AdamW (팀원 = adam)
+  lr: 1.0e-4
+  weight_decay: 0.01        # AdamW 기본값 (논문 미명시)
+  warmup_steps: 1000        # ★ 논문 = 1000-step linear warmup (팀원 = 0)
+  clip_grad_norm: 30.0      # ★ 논문 = 30 (팀원 = 1.0)
+
+# =============================================================================
+# 학습 루프
+# =============================================================================
+training:
+  max_epochs: 50            # ⚠️ 논문 **미명시**(학습 길이·수렴 기준 언급 없음).
+                            #    출처 = **팀원 코드** src/teammate_codes/local/conf.yml `epochs: 50` 계승.
+                            #    "논문 기준"이라고 인용하지 말 것 (CLAUDE.md 금지 #4).
+                            #    40,000행/batch8/accum5 → 에폭당 1,000 step → 총 50,000 step.
+  max_steps: null           # 지정 시 epochs보다 우선
+  grad_accum: 5             # effective batch = batch_size(8) * 5 = 40 (★ 논문 effective 40)
+  early_stop: false         # ⚠️ 논문 **미명시**(early stopping·모델 선택 기준 언급 없음). 팀원 코드는 on이었다.
+                            #    → 논문 재현에 근거가 없으므로 off를 기본으로 두고, best는 val_loss로 별도 추적한다.
+                            #    ⚠️ **early-stopping 로직 자체가 미구현**이다.
+                            #    true로 두면 train.py가 NotImplementedError로 즉시 막는다(조용한 무시 방지, B4).
+  mixed_precision: bf16     # ★ fp16 금지 (CLAUDE.md #1)
+
+# =============================================================================
+# 로깅 (TensorBoard + colorama) — cadence는 제안값(조정 가능)
+# =============================================================================
+logging:
+  ckpt_dir: /home/work/my-checkpoints/llmtse   # ★ 체크포인트 → <run_name>/{best,step_*,best_model.pth,config_used.yaml}
+                                               #   vFolder(영속). 상대경로면 세션 재생성 시 소실
+  run_dir: runs             # TensorBoard → runs/<run_name>/tb (체크포인트와 분리)
+  results_dir: /home/work/my-outputs/llmtse    # 평가·추론 산출물 → <run_name>/{preds,*.csv} (eval.py/inference.py)
+  log_every: 50             # train 스칼라(loss/grad/lr) 로깅 주기(step)
+  val_every: 500            # validation + 미디어 로깅 주기(step)  ← 제안
+  metric_every: 500         # SISDR/STOI/PESQ 계산 주기(step)
+  val_max_batches: 50       # validation 시 사용할 최대 batch 수(학습 중 속도용; null=전체)
+  ckpt_keep: 3              # 최근 체크포인트 유지 개수
+  fixed_sample_index: 0     # 미디어 로깅용 고정 dev CSV row (재현 가능)
+  mel: { n_fft: 1024, hop_length: 256, n_mels: 80 }   # TensorBoard mel-spectrogram 시각화용
