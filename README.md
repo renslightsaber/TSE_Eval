@@ -268,6 +268,11 @@ tse_eval/
 │   └── config.yaml      # 채점 정책(세 프로젝트가 동일해야 하는 값)
 ├── scripts/
 │   └── download_models.py   # 확장 지표용 모델(ECAPA/Whisper) 다운로드 + 검증
+├── results/             # ★ 채점 결과물 — 프로젝트별·런별 CSV + 보고서 사본
+│   ├── llmtse/<run>/        # per-row CSV · summary · config sidecar · eval.log · report*.md · config.yaml
+│   ├── styletse/<run>/      # 같은 구성 (best 런은 *_masked.csv 포함)
+│   └── tpex/                # 비어 있음 — 아직 채점 안 함
+├── exp_reports/         # 채점 기록 문서(정본 사본) + 프로젝트 간 대조 comparison.md
 ├── examples/            # 합성 예제 생성기 + sample_input.csv
 ├── tests/               # pytest (합성 신호, CPU only)
 ├── requirements/
