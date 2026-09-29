@@ -420,8 +420,10 @@ Whisper 가 찍는 `forced_decoder_ids` · `attention mask` 경고는 무해합�
 > 🔎 **DNSMOS 검사는 별도 프로세스에서 돕니다.** 같은 프로세스에서 torch 가 먼저 cuDNN 을
 > 올리면(CUDA conv 등) onnxruntime-gpu 의 CUDA EP 가
 > `libcudnn_ops.so.9: undefined symbol ...` 로 로드에 실패하고 **경고만 찍은 채 CPU 로 폴백**합니다
-> (2026-09-14 이 H200 에서 재현). `tse_eval` 은 DNSMOS 세션을 ECAPA/Whisper 보다 먼저 만들어
-> 이 순서를 피하므로 실제 채점은 CUDA 로 돕니다 — 검증도 그 순서를 그대로 재현합니다.
+> (2026-09-14 이 H200 에서 재현). `tse_eval` 은 2026-09-29 부터
+> `ort_setup.prime_dnsmos_session()` 으로 **DNSMOS 세션을 모델보다 먼저** 만들어 이 순서를
+> 코드에서 고정합니다([CAVEATS 1-5b](../../CAVEATS.md#1-5b--torch-가-cudnn-을-먼저-올리면-dnsmos-가-조용히-cpu-로-떨어집니다)).
+> 검증 스크립트는 그 보장에 기대지 않고 깨끗한 프로세스에서 다시 확인합니다.
 >
 > 참고로 이 H200 의 기본 상태에서 onnxruntime 은 **torch 번들 `libcudnn.so.9`(9.1) + 시스템 cuDNN 9.4 의
 > 하위 라이브러리**를 섞어 로드합니다(`/proc/self/maps` 로 확인, 2026-09-14). torch 번들 경로를
@@ -499,7 +501,7 @@ export HF_HOME=/home/work/my-checkpoints/hf_cache
 |---|---|---|
 | `ModuleNotFoundError: No module named 'urllib'` | 설치 중 다른 터미널에서 conda 명령이 겹쳐 **env 가 사라짐** | ⓪부터 다시. 설치 중엔 다른 터미널에서 conda 를 만지지 마세요 |
 | `ERROR: ... tse-eval 0.1.0 requires onnxruntime` (③단계) | repo 의 **`tse_eval.egg-info` 잔여물** 을 pip 이 오인 | `rm -rf tse_eval.egg-info build` 후 재시도. 무해하니 무시해도 됩니다 |
-| DNSMOS 가 CPU 로 돎 + `libcudnn_ops.so.9: undefined symbol` 경고 | 같은 프로세스에서 torch 가 cuDNN 을 **먼저** 올림 → onnxruntime CUDA EP 로드 실패 후 CPU 폴백 | `tse_eval` CLI·래퍼는 해당 없음. 직접 코드를 짤 때는 DNSMOS(ONNX) 세션을 torch CUDA 연산보다 먼저 만드세요 |
+| DNSMOS 가 CPU 로 돎 + `libcudnn_ops.so.9: undefined symbol` 경고 | 같은 프로세스에서 torch 가 cuDNN 을 **먼저** 올림 → onnxruntime CUDA EP 로드 실패 후 CPU 폴백 | `tse_eval` 은 `prime_dnsmos_session()` 으로 순서를 고정하므로 해당 없음. 직접 onnxruntime 을 쓰는 코드라면 ONNX 세션을 torch CUDA 연산보다 먼저 만드세요 |
 | `pip list` 에 onnxruntime 이 두 줄 | CPU `onnxruntime` 과 `onnxruntime-gpu` 공존 (`.[cpu]` extra 를 깔았음) | `pip uninstall -y onnxruntime onnxruntime-gpu` → ③ 재실행 → `pip install -e '.[test]'` |
 | `dnsmos_*` 4열이 전부 `nan` | **`librosa` 누락.** `speechmos` 가 의존성을 선언하지 않는데 내부에서 `librosa` 를 import 하고, 지표 함수가 예외를 `nan` 으로 삼킴 | `pip install librosa==0.11.0` |
 | `arch_list` 에 `sm_90` 없음 | cu121 아닌 torch 가 깔림 | `pip install --force-reinstall torch==2.5.1+cu121 torchaudio==2.5.1+cu121 --index-url https://download.pytorch.org/whl/cu121` |

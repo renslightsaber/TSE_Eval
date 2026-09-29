@@ -83,6 +83,33 @@ CUDA EP 와 CPU EP 의 DNSMOS 값은 부동소수점 커널 차이로 **최대 �
 - **대응(적용됨)**: 실제 사용된 EP 가 `<output>_config.json` 의 `dnsmos.actual_providers` 에
   기록됩니다. 세 sidecar 를 비교해 같은지 확인하세요.
 
+### 1-5b. 🔴 torch 가 cuDNN 을 먼저 올리면 DNSMOS 가 조용히 CPU 로 떨어집니다
+
+onnxruntime-gpu 의 CUDA EP 는 provider 라이브러리를 올릴 때 **cuDNN 9 를 dlopen** 합니다.
+그런데 이 서버에는 cuDNN 9 가 두 벌 있습니다 — 시스템 9.4.0(`/usr/lib/x86_64-linux-gnu`)과
+torch 번들 9.1.0.70(`site-packages/nvidia/cudnn/lib`). 한 프로세스 안에서 **torch 가 먼저**
+cuDNN 을 올리면(ECAPA·Whisper·CUDA resample 등 CUDA 합성곱이면 전부 해당) 두 벌이 섞여
+로드가 실패하고, onnxruntime 은 **경고 한 줄만 찍고 CPU EP 로 폴백**합니다.
+
+```
+Failed to load library libonnxruntime_providers_cuda.so with error:
+  libcudnn_ops.so.9: undefined symbol: ..., version libcudnn_graph.so.9
+```
+
+값은 계속 나오되 약 3배 느리고 [1-5](#1-5-dnsmos-를-cpu-와-cuda-로-섞어-채점하면-값이-어긋납니다)
+의 3e-3 차이가 생깁니다. 실측(2026-09-14, H200): ONNX 세션이 먼저면 어느 순서든 정상,
+torch cuDNN 이 먼저면 실패.
+
+- **대응(적용됨)**: `ort_setup.prime_dnsmos_session()` 이 **DNSMOS 세션을 먼저 만듭니다.**
+  `evaluate.py` 는 providers 설정 직후에, `metrics._get_asr`/`_get_spk` 는 모델을 올리기 전에
+  호출하므로 지표 순서나 호출 방식과 무관하게 순서가 고정됩니다. 비용은 늘지 않습니다
+  (CUDA 초기화 ~40초가 첫 행이 아니라 실행 시작으로 옮겨갈 뿐).
+- **확인법**: sidecar 의 `dnsmos.actual_providers` 또는
+  `python requirements/h200/verify_h200_env.py` 의 `DNSMOS 값 · 실제 EP` 항목.
+- 직접 짠 스크립트에서 onnxruntime 을 따로 쓴다면, torch CUDA 연산보다 **ONNX 세션을 먼저**
+  만드세요. 환경 차원의 대안(torch 번들 cuDNN 을 `LD_LIBRARY_PATH` 앞에 두기)은
+  [A6000 가이드 §5.2](requirements/a6000/INSTALL.md#52-dnsmos-가-cpu-로-돎--cuda-ep-로드-실패) 에 있습니다.
+
 ### 1-6. 🔴 모델 출력이 ±1 을 넘으면 DNSMOS 가 **클리핑된 신호**를 채점합니다
 
 이 프로젝트에서 가장 비쌌던 버그입니다. 에러도 `nan` 도 없이 **그럴듯하지만 틀린 숫자**가

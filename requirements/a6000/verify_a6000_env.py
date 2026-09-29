@@ -365,9 +365,10 @@ def _dnsmos_probe(providers: str) -> int:
 
     ★ 별도 프로세스인 이유: 같은 프로세스에서 torch 가 먼저 cuDNN 을 올리면(예: CUDA conv1d)
       onnxruntime-gpu 의 CUDA EP 가 `libcudnn_ops.so.9: undefined symbol` 로 로드에 실패하고
-      ★ 경고만 찍고 CPU 로 폴백 ★ 한다(2026-09-14 이 H200 에서 재현). tse_eval 파이프라인은
-      DNSMOS 세션을 ECAPA/Whisper 보다 먼저 만들어 이 순서를 피하므로, 검증도 깨끗한
-      프로세스에서 같은 순서로 해야 실제 채점과 같은 결론이 나온다.
+      ★ 경고만 찍고 CPU 로 폴백 ★ 한다(2026-09-14 이 H200 에서 재현). tse_eval 은
+      ort_setup.prime_dnsmos_session() 으로 DNSMOS 세션을 모델보다 먼저 만들어 이 순서를
+      코드에서 고정하지만(CAVEATS 1-5b), 검증은 그 보장에 기대지 않고 깨끗한 프로세스에서
+      CLI 와 같은 순서로 다시 확인한다.
     """
     import json
     import numpy as np

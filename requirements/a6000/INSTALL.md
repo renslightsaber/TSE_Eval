@@ -291,7 +291,7 @@ pip install librosa==0.11.0
 | 경고 | 원인 | 대응 |
 |---|---|---|
 | `Failed to load library libonnxruntime_providers_cuda.so` + `libcudnn*.so.9: cannot open shared object file` | onnxruntime-gpu 1.20 은 CUDA 12 + **cuDNN 9** 가 필요한데 시스템 cuDNN 이 없고 torch 번들 cuDNN 을 찾지 못함 | 아래 `LD_LIBRARY_PATH` 설정 |
-| 같은 메시지 + `undefined symbol ... libcudnn_graph.so.9` | 서로 다른 버전의 cuDNN 이 섞임 (시스템 cuDNN 이 따로 있는 서버에서, torch 가 cuDNN 을 **먼저** 올린 프로세스) | `tse_eval` CLI·래퍼는 DNSMOS 세션을 먼저 만들어 해당 없음. 아래 `LD_LIBRARY_PATH` 설정으로도 해소 |
+| 같은 메시지 + `undefined symbol ... libcudnn_graph.so.9` | 서로 다른 버전의 cuDNN 이 섞임 (시스템 cuDNN 이 따로 있는 서버에서, torch 가 cuDNN 을 **먼저** 올린 프로세스) | `tse_eval` 은 `ort_setup.prime_dnsmos_session()` 으로 ONNX 세션을 먼저 만들어 해당 없음. 직접 짠 코드라면 아래 `LD_LIBRARY_PATH` 설정으로도 해소 |
 | `onnxruntime-gpu` 버전이 1.19 미만 | 1.18.x 는 cuDNN 8 빌드 | `pip install "onnxruntime-gpu>=1.19.2,<1.21"` (1.18 로 내리지 말 것) |
 
 torch 번들 cuDNN/cuBLAS 를 onnxruntime 이 찾도록 하는 방법 (세션마다, 또는 `~/.bashrc`).

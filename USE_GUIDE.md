@@ -51,6 +51,10 @@ CPU 만 있는 머신은 A6000 파일의 `onnxruntime-gpu` 줄을 `onnxruntime==
 > `tse_eval/ort_setup.py` 가 providers 를 주입하므로 `onnxruntime-gpu` 가 깔려 있으면
 > **기본값이 CUDA** 입니다(실측 8.4배). 실제로 쓰인 EP 는 sidecar JSON 의 `dnsmos.actual_providers`.
 > 자세한 속도 수치는 [requirements/h200/INSTALL.md 의 DNSMOS 속도](requirements/h200/INSTALL.md#dnsmos-속도-실측) 참고.
+>
+> 🔒 DNSMOS 세션은 **실행 시작 시점에 먼저** 만들어집니다(`ort_setup.prime_dnsmos_session`).
+> torch 가 cuDNN 을 먼저 올리면 CUDA EP 가 조용히 CPU 로 폴백하기 때문입니다
+> ([CAVEATS 1-5b](CAVEATS.md#1-5b--torch-가-cudnn-을-먼저-올리면-dnsmos-가-조용히-cpu-로-떨어집니다)).
 
 설치 확인:
 
