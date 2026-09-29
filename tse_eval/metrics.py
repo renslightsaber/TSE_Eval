@@ -412,6 +412,20 @@ def _device() -> str:
         return "cpu"
 
 
+def _ort_session_first() -> None:
+    """Make sure the DNSMOS ONNX session exists before torch loads cuDNN.
+
+    Both model-backed metrics run CUDA convolutions, which pull in torch's
+    bundled cuDNN; if that happens first, onnxruntime's CUDA EP fails to load and
+    DNSMOS silently falls back to the CPU (``tse_eval.ort_setup`` docstring).
+    ``compute_row_metrics`` already scores DNSMOS before these two, but a caller
+    using the metrics directly has no such guarantee — so pin it here as well.
+    No-op unless onnxruntime was configured, i.e. unless DNSMOS is in play.
+    """
+    from . import ort_setup
+    ort_setup.prime_dnsmos_session(verbose=False)
+
+
 def _get_asr():
     """Load Whisper once (bf16 on GPU, fp32 on CPU) and cache it.
 
@@ -423,6 +437,7 @@ def _get_asr():
     makes the number comparable with published ASR results.
     """
     if "model" not in _asr_cache:
+        _ort_session_first()
         import torch
         from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor
         device = _device()
@@ -449,6 +464,7 @@ def _get_spk():
     "Input type (torch.FloatTensor) and weight type (torch.cuda.FloatTensor)".
     """
     if "model" not in _spk_cache:
+        _ort_session_first()
         from speechbrain.inference import EncoderClassifier
         device = _device()
         _spk_cache.update(

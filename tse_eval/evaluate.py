@@ -24,6 +24,7 @@ from .audio import load_wav
 from .metrics import (DEFAULT_METRICS, METRIC_COLUMNS, _DNSMOS_COLUMNS,
                       compute_row_metrics, expand_companions, micro_wer)
 from .ort_setup import (DEFAULT_INTRA_OP_THREADS, configure_onnxruntime,
+                        prime_dnsmos_session,
                         provenance as ort_provenance)
 
 # Auto-detection candidates (case-insensitive), first match wins.
@@ -258,6 +259,10 @@ def evaluate_csv(
         set(DEFAULT_METRICS) if metrics is None else set(metrics))
     if want & _DNSMOS_COLUMNS:
         configure_onnxruntime(threads=dnsmos_threads, providers=dnsmos_providers)
+        # ★ Build the session before any model-backed metric can load torch's
+        # cuDNN: with torch's copy in first, the CUDA EP fails to load and DNSMOS
+        # drops to the CPU with only a warning (ort_setup module docstring).
+        prime_dnsmos_session()
 
     rows_iter = df.iterrows()
     if progress:

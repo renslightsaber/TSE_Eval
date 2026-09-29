@@ -42,6 +42,21 @@ by only 4e-07). DNSMOS is normally reported to two decimals so this sits below
 the reported precision, but **every system in a comparison must use the same
 providers**. :func:`actual_providers` records what really ran, and the CLI writes
 it into the sidecar, so a mismatch is detectable after the fact.
+
+★ **Load order matters, so :func:`prime_dnsmos_session` pins it.** The CUDA EP
+dlopen()s cuDNN 9 when its provider library loads. If torch has already pulled in
+its own bundled cuDNN (any CUDA convolution does: ECAPA, Whisper, a CUDA
+resample), the provider ends up resolving part of cuDNN from the system copy and
+part from torch's, and the mismatch aborts the load::
+
+    Failed to load library libonnxruntime_providers_cuda.so with error:
+      libcudnn_ops.so.9: undefined symbol: ..., version libcudnn_graph.so.9
+
+onnxruntime then prints a warning and falls back to the CPU EP — scores still
+come out, ~3x slower and up to 3e-03 different. Measured on this H200
+(2026-09-14): ONNX-session-first works in either order; torch-cuDNN-first does
+not. Building the DNSMOS session up front removes the dependence on which metric
+happens to run first.
 """
 
 from __future__ import annotations
@@ -154,6 +169,44 @@ def configure_onnxruntime(threads: int = DEFAULT_INTRA_OP_THREADS,
 
     ort.InferenceSession = _session
     _configured = True
+
+
+def prime_dnsmos_session(verbose: bool = True) -> Optional[Sequence[str]]:
+    """Build the DNSMOS ONNX session now, before torch can load cuDNN.
+
+    Call this straight after :func:`configure_onnxruntime` and before anything
+    that runs a CUDA convolution (``metrics._get_asr`` / ``_get_spk`` call it for
+    exactly that reason). See the module docstring for why the order decides
+    whether the CUDA EP loads at all.
+
+    Costs nothing extra overall: it moves onnxruntime's one-time CUDA setup
+    (~40 s) to the start of the run instead of the first DNSMOS row.
+
+    No-op — returning whatever is already known — when onnxruntime was never
+    configured (DNSMOS not requested), when a session already exists, or when
+    ``speechmos``/``librosa`` are missing. In that last case DNSMOS degrades to
+    NaN later with its own warning; priming stays silent about it.
+
+    Returns:
+        The providers onnxruntime actually accepted, or ``None`` if no session
+        could be created.
+    """
+    if not _configured or _actual_providers is not None:
+        return actual_providers()
+    try:
+        import numpy as np
+        from speechmos import dnsmos as _dnsmos
+
+        # 1 s of near-silence at DNSMOS's own rate: enough to construct both
+        # sessions (speechmos builds them lazily inside run()) and cheap to score.
+        rng = np.random.default_rng(0)
+        _dnsmos.run((rng.standard_normal(16_000) * 0.01).astype("float32"), sr=16_000)
+    except Exception as exc:                                # noqa: BLE001
+        if verbose:
+            print(f"[tse-eval] ⚠ could not pre-build the DNSMOS session "
+                  f"({type(exc).__name__}: {exc}); it will be built on the first "
+                  f"row instead", file=sys.stderr, flush=True)
+    return actual_providers()
 
 
 def actual_providers() -> Optional[Sequence[str]]:
