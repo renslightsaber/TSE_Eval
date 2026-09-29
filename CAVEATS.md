@@ -109,6 +109,9 @@ torch cuDNN 이 먼저면 실패.
 - 직접 짠 스크립트에서 onnxruntime 을 따로 쓴다면, torch CUDA 연산보다 **ONNX 세션을 먼저**
   만드세요. 환경 차원의 대안(torch 번들 cuDNN 을 `LD_LIBRARY_PATH` 앞에 두기)은
   [A6000 가이드 §5.2](requirements/a6000/INSTALL.md#52-dnsmos-가-cpu-로-돎--cuda-ep-로드-실패) 에 있습니다.
+- ⚠️ **시스템 cuDNN 이 9 가 아니면 순서와 무관하게 실패합니다.** 연구실 A6000 서버가 그 경우로,
+  cuDNN 8.9.5 뿐이라 CUDA EP 가 아예 로드되지 않습니다(2026-09-29 실측). 그 서버에서는
+  `LD_LIBRARY_PATH` 설정이 **선택이 아니라 필수**입니다 — A6000 가이드 ③-b.
 
 ### 1-6. 🔴 모델 출력이 ±1 을 넘으면 DNSMOS 가 **클리핑된 신호**를 채점합니다
 

@@ -33,17 +33,18 @@ TSE_Eval 은 채점 도구라, **어느 GPU 에서 채점하든 같은 바이너
 | 핵심 패키지 | onnxruntime-gpu 1.20.2 · librosa 0.11.0 · speechmos 0.0.1.1 · speechbrain 1.0.3 · transformers 4.46.3 · accelerate 1.10.0 · jiwer 3.1.0 · numpy 1.26.4 · **setuptools < 81** · pesq 0.0.4 |
 | 컴파일러 | gcc (pesq 빌드용) |
 
-> ⚠️ **검증 범위 안내**
-> 2026-09-14 에는 A6000 실기가 없어 **A6000 에서 직접 설치해 보지는 못했습니다.** 확인한 것은 다음과 같습니다.
-> - 이 문서의 §3 명령을 **H200 서버에서 그대로** 따라 임시 env 에 처음부터 설치(pip 캐시 경로만 추가) →
->   111 패키지 · `pip check` 클린 · `verify_a6000_env.py --full` 에서 **GPU 판별 1건(기대 (8,6) vs H200 (9,0))만 FAIL, 나머지 47건 PASS**
->   (`--allow-other-gpu` 면 WARN 1 · 종료코드 0) · pytest 105 passed, 1 skipped · 합성 예제 DNSMOS nan 0 / CUDA EP.
->   설치된 패키지 목록(`pip freeze --all`)은 H200 가이드로 설치한 env 와 **완전히 동일**했습니다.
-> - 같은 torch cu121 + `onnxruntime-gpu>=1.19.2` 조합이 **A6000 실기(driver 530.30.02)** 에서 CUDA EP 를 로드한 기록:
->   `tpex/requirements/a6000/README.md` §3-2.
+> ✅ **A6000 실기 검증 완료 — 2026-09-29, RTX A6000 ×3 · driver 530.30.02 · Ubuntu 22.04**
+> 이 문서의 §3 을 그대로 따라 처음부터 설치했습니다(GPU 2번만 사용, 약 6분).
+> - **111 패키지 · `pip check` 클린** · pytest **111 passed, 1 skipped**
+> - `verify_a6000_env.py --skip-models` → **PASS 43 · FAIL 0** (sm_86 · capability (8,6) · bf16 · 23개 핀 전부)
+> - 🔴 **단, [③-b](#③-b-cudnn-경로-설정--이-서버에서는-필수-즉시) 를 하지 않으면 DNSMOS 가 CPU 로 떨어집니다.**
+>   이 서버의 시스템 cuDNN 은 **8.9.5** 뿐이라 cuDNN 9 를 요구하는 onnxruntime-gpu 1.20 의
+>   CUDA EP 로드가 실패합니다(경고만 찍고 폴백 → 약 3배 느리고 값이 최대 3e-3 차이).
+>   torch 번들 cuDNN 9.1.0.70 을 탐색 경로 앞에 두면 **PASS 43 · FAIL 0** 으로 정상화됩니다(실측).
 >
-> 즉 **패키지 구성은 검증됐고, A6000 고유 항목(sm_86 커널 · 드라이버 · cuDNN 탐색)은 미검증**입니다.
-> A6000 에서 처음 설치하면 [§4](#4-설치-검증) 결과를 이 문서에 기록해 주세요.
+> 이전(2026-09-14) H200 에서의 교차 검증도 유효합니다: 같은 명령으로 설치했을 때
+> 패키지 목록(`pip freeze --all`)이 H200 가이드 설치본과 **완전히 동일**했고, GPU 판별 1건만
+> FAIL 이었습니다(`--allow-other-gpu` 면 WARN).
 
 ### 1.1 H200 과 다른 점
 
@@ -56,7 +57,7 @@ TSE_Eval 은 채점 도구라, **어느 GPU 에서 채점하든 같은 바이너
 | env 위치 | 제약 없음 (온프레미스) | vFolder(`/home/work/my-code/`) 안이어야 영속 |
 | `HF_HOME` | **직접 지정 필수** ([③-⑤](#⑤-hf_home-지정--필수)) — 스크립트 기본값이 H200 경로 | `/home/work/my-checkpoints/hf_cache` |
 | pip 캐시 | 보통 켜져 있음 → `--cache-dir` 불필요 | NGC 이미지가 꺼둠 → `--cache-dir` 필수 |
-| 시스템 cuDNN | 없을 수 있음 → torch 번들(9.1) 을 씀 ([§5.2](#52-dnsmos-가-cpu-로-돎--cuda-ep-로드-실패)) | 9.4.0 설치돼 있음 |
+| 시스템 cuDNN | **8.9.5 (실측)** → cuDNN 9 가 없어 torch 번들(9.1)을 가리켜 줘야 함 ([③-b](#③-b-cudnn-경로-설정--이-서버에서는-필수-즉시)) | 9.4.0 설치돼 있음 |
 | `scripts/eval_*.sh` | 경로 기본값이 H200 서버 기준 → **환경변수로 덮어쓰기** ([§4.4](#44-채점-래퍼를-쓸-때)) | 그대로 |
 | 속도 수치 | 미측정 | DNSMOS 175 ms/utt 등 실측 |
 
@@ -120,6 +121,44 @@ pip install -r requirements/a6000/requirements_a6000.txt
 
 `pesq` 가 소스 빌드되므로 한동안 멈춘 것처럼 보일 수 있습니다.
 `Building wheel for pesq ... finished with status 'done'` 이 보이면 성공입니다.
+
+### ③-b cuDNN 경로 설정 — **이 서버에서는 필수** (`즉시`)
+
+`onnxruntime-gpu` 1.20 의 CUDA EP 는 **cuDNN 9** 를 요구하는데, 연구실 A6000 서버의 시스템
+cuDNN 은 **8.9.5** 입니다(2026-09-29 실측). 그대로 두면 CUDA EP 로드가 실패하고 **경고 한 줄만
+남긴 채 DNSMOS 가 CPU 로 떨어집니다** — 약 3배 느리고 값이 최대 `3e-3` 달라집니다.
+
+②에서 설치한 torch 가 `nvidia-cudnn-cu12 9.1.0.70` 을 함께 깔아 두므로, 그 경로를 탐색 순서
+앞에 두면 됩니다. env 를 활성화할 때 자동으로 걸리도록 훅으로 만들어 두세요.
+
+```bash
+mkdir -p "$CONDA_PREFIX/etc/conda/activate.d" "$CONDA_PREFIX/etc/conda/deactivate.d"
+
+cat > "$CONDA_PREFIX/etc/conda/activate.d/00_tseeval_cudnn.sh" <<'SH'
+_TSEEVAL_OLD_LD="${LD_LIBRARY_PATH-}"
+export _TSEEVAL_OLD_LD_SET="${LD_LIBRARY_PATH+set}"
+export _TSEEVAL_OLD_LD
+_NV="$CONDA_PREFIX/lib/python3.10/site-packages/nvidia"
+export LD_LIBRARY_PATH="$_NV/cudnn/lib:$_NV/cublas/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+unset _NV
+SH
+
+cat > "$CONDA_PREFIX/etc/conda/deactivate.d/00_tseeval_cudnn.sh" <<'SH'
+if [ "${_TSEEVAL_OLD_LD_SET-}" = "set" ]; then export LD_LIBRARY_PATH="${_TSEEVAL_OLD_LD-}"; else unset LD_LIBRARY_PATH; fi
+unset _TSEEVAL_OLD_LD _TSEEVAL_OLD_LD_SET
+SH
+```
+
+훅을 걸었으면 `conda deactivate && conda activate tseeval` 로 다시 들어오세요.
+확인은 검증 스크립트의 **`DNSMOS 값 · 실제 EP`** 항목입니다 —
+`EP ['CUDAExecutionProvider', ...]` 면 성공, `['CPUExecutionProvider']` 면 훅이 안 걸린 것입니다.
+
+> ⚠️ 이 훅도 `$CONDA_PREFIX` 안이라 **git 으로 따라오지 않습니다.** env 를 새로 만들면 다시 만드세요.
+> 시스템에 cuDNN 9 가 설치된 서버(H200 등)에서는 필요 없습니다.
+> CUDA 를 못 쓰는 상황이면 `--dnsmos-providers cpu` 로 채점할 수 있지만, **비교 대상 전체를 같은
+> providers 로** 채점해야 합니다.
+
+---
 
 ### ④ 프로젝트 + 테스트 도구
 
@@ -290,13 +329,14 @@ pip install librosa==0.11.0
 
 | 경고 | 원인 | 대응 |
 |---|---|---|
-| `Failed to load library libonnxruntime_providers_cuda.so` + `libcudnn*.so.9: cannot open shared object file` | onnxruntime-gpu 1.20 은 CUDA 12 + **cuDNN 9** 가 필요한데 시스템 cuDNN 이 없고 torch 번들 cuDNN 을 찾지 못함 | 아래 `LD_LIBRARY_PATH` 설정 |
+| `Failed to create CUDAExecutionProvider. Require cuDNN 9.* and CUDA 12.*` | 시스템 cuDNN 이 8.x 라 cuDNN 9 가 없음 — **연구실 A6000 서버가 이 경우(8.9.5, 2026-09-29 실측)** | [③-b](#③-b-cudnn-경로-설정--이-서버에서는-필수-즉시) 의 훅 (= 아래 `LD_LIBRARY_PATH`) |
 | 같은 메시지 + `undefined symbol ... libcudnn_graph.so.9` | 서로 다른 버전의 cuDNN 이 섞임 (시스템 cuDNN 이 따로 있는 서버에서, torch 가 cuDNN 을 **먼저** 올린 프로세스) | `tse_eval` 은 `ort_setup.prime_dnsmos_session()` 으로 ONNX 세션을 먼저 만들어 해당 없음. 직접 짠 코드라면 아래 `LD_LIBRARY_PATH` 설정으로도 해소 |
 | `onnxruntime-gpu` 버전이 1.19 미만 | 1.18.x 는 cuDNN 8 빌드 | `pip install "onnxruntime-gpu>=1.19.2,<1.21"` (1.18 로 내리지 말 것) |
 
-torch 번들 cuDNN/cuBLAS 를 onnxruntime 이 찾도록 하는 방법 (세션마다, 또는 `~/.bashrc`).
-H200 에서 이 설정을 넣으면 onnxruntime 이 torch 번들 cuDNN 9.1 만 쓰게 되고(`/proc/self/maps` 확인),
-torch 를 먼저 쓴 프로세스에서도 CUDA EP 가 붙는 것까지 확인했습니다. **A6000 실기에서는 미검증**입니다.
+torch 번들 cuDNN/cuBLAS 를 onnxruntime 이 찾도록 하는 방법 (일회성 확인용 — 상시 적용은 [③-b](#③-b-cudnn-경로-설정--이-서버에서는-필수-즉시) 의 훅).
+**2026-09-29 연구실 A6000 에서 실측**: 이 설정 전 `EP ['CPUExecutionProvider']`(FAIL 1),
+설정 후 `EP ['CUDAExecutionProvider', 'CPUExecutionProvider']`(PASS 43 · FAIL 0).
+H200 에서도 같은 설정이 torch 번들 cuDNN 9.1 로 통일시켜 순서 문제를 없앱니다.
 
 ```bash
 NV=$(python -c "import os, nvidia.cudnn; print(os.path.dirname(list(nvidia.cudnn.__path__)[0]))")
