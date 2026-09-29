@@ -254,6 +254,44 @@ def check_pins():
             record("FAIL", f"pkg {name}", f"{installed} ⊭ {spec}")
 
 
+def check_shadowing():
+    """활성 env **밖**에서 로드되는 패키지를 찾는다.
+
+    ★ Backend.AI(NIPA) 컨테이너가 세션마다
+      `PYTHONPATH=/home/work/.local/lib/python3.10/site-packages` 를 주입한다(사용자 설정
+      어디에도 없다). 2026-09-23 그 경로에 transformers 5.17.0 / huggingface_hub 1.32.0 이
+      설치되면서 env 의 고정본(4.46.3 / 0.34.4)을 가렸고, httpx 가 없어 `import transformers`
+      자체가 실패했다. TSE_Eval 에서는 지표 함수가 예외를 nan 으로 삼키므로
+      ★ wer·spk_sim 열이 에러 없이 전부 nan ★ 이 되는 형태로 나타난다.
+
+    🔴 `unset PYTHONPATH` 만으로는 고쳐지지 않는다 (형제 repo 3개에서 4조합 실측):
+         그대로 / unset PYTHONPATH 만 / PYTHONNOUSERSITE=1 만 → 전부 5.17.0
+         둘 다                                                → 4.46.3 ✅
+       conda env 의 user-site 디렉토리가 바로 그 경로라, site.py 가 addusersitepackages()
+       를 addsitepackages() 보다 먼저 부르기 때문이다. 처방은 activate.d 훅(INSTALL.md).
+    """
+    import importlib
+    prefix = os.environ.get("CONDA_PREFIX", sys.prefix)
+    watched = ["numpy", "torch", "torchaudio", "onnxruntime", "librosa", "speechmos",
+               "transformers", "huggingface_hub", "speechbrain", "jiwer"]
+    outside = []
+    for name in watched:
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                mod = importlib.import_module(name)
+        except Exception as e:          # import 가 깨진 것도 그림자의 증상이다
+            outside.append(f"{name}(import 실패: {type(e).__name__})")
+            continue
+        f = getattr(mod, "__file__", "") or ""
+        if f and not f.startswith(prefix):
+            outside.append(f"{name} ← {f.split('site-packages')[0]}")
+    if not outside:
+        return "PASS", f"감시 {len(watched)}개 모두 env 안 ({Path(prefix).name})"
+    return "FAIL", (f"env 밖/깨짐: {', '.join(outside)} — activate.d 훅이 없습니다. "
+                    f"임시 처방: export PYTHONNOUSERSITE=1 && unset PYTHONPATH (INSTALL.md 참고)")
+
+
 def check_onnxruntime_single():
     gpu, cpu = version_of("onnxruntime-gpu"), version_of("onnxruntime")
     if gpu and cpu:
@@ -524,6 +562,7 @@ def main() -> int:
 
     section("3. 패키지")
     check_pins()
+    run("패키지 그림자 (env 밖 로드)", check_shadowing)
     run("onnxruntime 배포본 1개", check_onnxruntime_single)
     run("numpy < 2", check_numpy_major)
     run("setuptools < 81", check_setuptools)

@@ -213,7 +213,7 @@ python requirements/a6000/verify_a6000_env.py --full
 |---|---|---|
 | **1. Python·env** | Python 3.10.x · conda env 인지 (base 가 아닌지) | 시스템 python·base env 에 설치 |
 | **2. GPU·PyTorch** | `torch/torchaudio == 2.5.1+cu121`, CUDA 12.1 · 드라이버 ≥ 525 · arch_list 에 **sm_86** · capability **(8,6)** · bf16 연산 · CUDA resample | 잘못된 torch 빌드, 드라이버 부족, 다른 GPU |
-| **3. 패키지** | [`requirements_a6000.txt`](./requirements_a6000.txt) 를 **직접 읽어** 23개 패키지 대조 · **onnxruntime 배포본 1개** · numpy < 2 · setuptools < 81 · `pip check` · `librosa`/`speechmos` import · editable `tse-eval` · asteroid 백엔드 | 핀 이탈 · DNSMOS 전부 `nan` · 래퍼가 첫 행에서 멈춤 |
+| **3. 패키지** | [`requirements_a6000.txt`](./requirements_a6000.txt) 를 **직접 읽어** 23개 패키지 대조 · **패키지 그림자(env 밖 로드)** · **onnxruntime 배포본 1개** · numpy < 2 · setuptools < 81 · `pip check` · `librosa`/`speechmos` import · editable `tse-eval` · asteroid 백엔드 | 핀 이탈 · DNSMOS 전부 `nan` · 래퍼가 첫 행에서 멈춤 |
 | **4. 지표** | `configs/config.yaml` 로드 · SI-SDR native ≡ asteroid(< 1e-6) · SI-SDR/STOI/ESTOI/PESQ 유한값 · **DNSMOS 가 실제로 `CUDAExecutionProvider` 로 도는지** (별도 프로세스) | DNSMOS 가 조용히 CPU 로 폴백 |
 | **5. 모델 캐시·CLI** | `HF_HOME` · `embedding_model.ckpt` · `model.safetensors` · `.incomplete` 없음 · `python -m tse_eval --help` | 채점 도중 3 GB 재다운로드 |
 | **6. `--full`** | ECAPA self-cosine ≈ 1 · Whisper bf16 전사 | 모델 로드 실패 |
@@ -339,7 +339,21 @@ pip install pesq==0.0.4
 셸마다 `HF_HOME` 이 다릅니다([③-⑤](#⑤-hf_home-지정--필수)). `echo $HF_HOME` 으로 확인하고, 검증 스크립트의
 `5. 모델 캐시` 절이 PASS 인지 보세요.
 
-### 5.7 `ModuleNotFoundError: No module named 'pkg_resources'`
+### 5.7 `wer` · `spk_sim` 이 전부 `nan` (패키지 그림자)
+
+검증 스크립트의 **패키지 그림자** 항목이 FAIL 이면, env 밖의 패키지가 고정본을 가린 것입니다.
+H200(Backend.AI) 쪽에서는 컨테이너가 `PYTHONPATH=~/.local/lib/python3.10/site-packages` 를
+주입해 이 사고가 났습니다([H200 가이드](../h200/INSTALL.md) §3 ⑤-b).
+온프레미스 A6000 서버에는 보통 해당하지 않지만, `~/.local` 에 HF 스택이 깔려 있다면 같은 훅을
+만드세요(이름만 `00_tseeval_pin.sh` 로 동일).
+
+```bash
+python -c "import transformers, huggingface_hub as h; print(transformers.__version__, h.__version__)"
+#  4.46.3 0.34.4 이어야 합니다
+export PYTHONNOUSERSITE=1 && unset PYTHONPATH     # 임시 처방
+```
+
+### 5.8 `ModuleNotFoundError: No module named 'pkg_resources'`
 
 setuptools 81+ 에서 `pkg_resources` 가 제거됐는데 asteroid 0.7.0 → torchmetrics 0.11.4 가 그것을 import 합니다.
 

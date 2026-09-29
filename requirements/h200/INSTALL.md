@@ -10,7 +10,7 @@
 | 🖥️ **대상 환경** | NVIDIA H100 / H200 (Hopper, sm_90) · Ubuntu 22.04 · Python 3.10.20 |
 | ⏱️ **총 소요 시간** | 약 **6분** (+ 모델 다운로드 3.1 GB) |
 | 💾 **필요 디스크** | env 약 7 GB + 모델 3.0 GB + pip 캐시 3.2 GB ≈ **13 GB** |
-| ✅ **검증 상태** | 2026-09-14 이 머신에서 임시 env 로 **이 문서 그대로 처음부터 완주 재검증** (111 패키지 · `pip check` 클린 · `verify_h200_env.py --full` PASS 48/48 · 테스트 105 passed, 1 skipped · 예제 DNSMOS nan 0 / CUDA EP) |
+| ✅ **검증 상태** | 2026-09-14 이 머신에서 임시 env 로 **이 문서 그대로 처음부터 완주 재검증** (111 패키지 · `pip check` 클린 · 테스트 105 passed, 1 skipped · 예제 DNSMOS nan 0 / CUDA EP) · 2026-09-29 그림자 사고 복구 후 `verify_h200_env.py --full` **PASS 49/49** |
 
 </div>
 
@@ -56,8 +56,12 @@ pip install --cache-dir /home/work/my-code/pip_cache -r requirements/h200/requir
 # ④ 프로젝트 자체 + 테스트 도구(pytest, asteroid)
 pip install --cache-dir /home/work/my-code/pip_cache -e '.[test]'
 
-# ⑤⑥ 모델 다운로드
+# ⑤ HF 캐시 + ⑤-b 환경 고정 훅(컨테이너의 PYTHONPATH 그림자 차단)
 export HF_HOME=/home/work/my-checkpoints/hf_cache
+printf 'export PYTHONNOUSERSITE=1\nunset PYTHONPATH\n' \
+    > "$CONDA_PREFIX/etc/conda/activate.d/00_tseeval_pin.sh"   # 전체 내용은 §3 ⑤-b
+
+# ⑥ 모델 다운로드
 python scripts/download_models.py
 
 # 검증 (마지막 줄이 "✅ 설치가 올바릅니다." 여야 함)
@@ -275,6 +279,53 @@ export HF_HOME=/home/work/my-checkpoints/hf_cache
 
 ---
 
+### ⑤-b 환경 고정 훅 &nbsp;·&nbsp; `즉시` &nbsp;·&nbsp; **이 컨테이너에서는 필수**
+
+Backend.AI(NIPA) 컨테이너는 세션마다 `PYTHONPATH=/home/work/.local/lib/python3.10/site-packages`
+를 **자동으로 주입**합니다. 2026-09-23 그 경로에 `transformers 5.17.0` / `huggingface_hub 1.32.0`
+이 설치되면서 env 의 고정본(4.46.3 / 0.34.4)을 가렸고, 그 5.17.0 은 `httpx` 를 요구하는데 없어서
+**`import transformers` 자체가 실패**합니다. TSE_Eval 에서는 이것이 조용한 실패로 나타납니다 —
+지표 함수가 예외를 `nan` 으로 삼키므로 **`wer` 과 `spk_sim` 열이 에러 없이 전부 `nan`**.
+
+```bash
+mkdir -p "$CONDA_PREFIX/etc/conda/activate.d" "$CONDA_PREFIX/etc/conda/deactivate.d"
+
+cat > "$CONDA_PREFIX/etc/conda/activate.d/00_tseeval_pin.sh" <<'SH'
+# TSE_Eval 환경 고정 — 컨테이너가 주입하는 ~/.local 그림자를 가린다.
+_TSEEVAL_PIN_HAD_PP="${PYTHONPATH+set}"
+export _TSEEVAL_PIN_HAD_PP
+export _TSEEVAL_PIN_OLD_PYTHONPATH="${PYTHONPATH-}"
+export _TSEEVAL_PIN_OLD_NOUSERSITE="${PYTHONNOUSERSITE-}"
+export PYTHONNOUSERSITE=1
+unset PYTHONPATH
+SH
+
+cat > "$CONDA_PREFIX/etc/conda/deactivate.d/00_tseeval_pin.sh" <<'SH'
+if [ "${_TSEEVAL_PIN_HAD_PP-}" = "set" ]; then export PYTHONPATH="${_TSEEVAL_PIN_OLD_PYTHONPATH-}"; else unset PYTHONPATH; fi
+if [ -n "${_TSEEVAL_PIN_OLD_NOUSERSITE-}" ]; then export PYTHONNOUSERSITE="${_TSEEVAL_PIN_OLD_NOUSERSITE}"; else unset PYTHONNOUSERSITE; fi
+unset _TSEEVAL_PIN_HAD_PP _TSEEVAL_PIN_OLD_PYTHONPATH _TSEEVAL_PIN_OLD_NOUSERSITE
+SH
+```
+
+> 🔴 **둘 다 필요합니다** (형제 repo 3개에서 4조합 실측, TSE_Eval 에서 재확인):
+> `unset PYTHONPATH` 만 → 5.17.0 · `PYTHONNOUSERSITE=1` 만 → 5.17.0 · **둘 다 → 4.46.3 ✅**
+> conda env 의 user-site 경로가 바로 그 디렉토리라, `site.py` 가 `addusersitepackages()` 를
+> `addsitepackages()` 보다 먼저 부르기 때문입니다.
+>
+> ⚠️ 이 파일들은 **repo 밖(`$CONDA_PREFIX`)이라 git 으로 따라오지 않습니다.** 새 세션·새 서버에서는
+> 다시 만들어야 합니다. 살아 있는지는 검증 1 의 **패키지 그림자** 항목이 알려 줍니다.
+> `~/.local` 의 5.17.0 은 **지우지 마세요** — 다른 사람이 필요해서 설치한 것이고, 이 훅은
+> `tseeval` env 를 활성화한 셸에서만 그것을 가립니다.
+
+확인:
+
+```bash
+python -c "import transformers, huggingface_hub as h; print(transformers.__version__, h.__version__)"
+#  4.46.3 0.34.4      ← 5.17.0 / 1.32.0 이 나오면 훅이 적용되지 않은 것입니다
+```
+
+---
+
 ### ⑥ 모델 2개 다운로드 + 검증 &nbsp;·&nbsp; `35초` &nbsp;·&nbsp; 약 3.1 GB
 
 ```bash
@@ -377,7 +428,7 @@ python requirements/h200/verify_h200_env.py --full
 |---|---|---|
 | 1. Python · env | Python 3.10.20 · env 가 `/home/work/my-code/` 안 | 세션 종료 시 env 증발 |
 | 2. GPU · PyTorch | torch `2.5.1+cu121` · driver ≥ 535 · **sm_90** · capability (9,0) · bf16 연산 | cu121 아닌 torch → ② 재설치 |
-| 3. 패키지 | `requirements_h200.txt` 23개 핀 전부 · **onnxruntime 배포본 1개** · numpy<2 · setuptools<81 · `pip check` · `librosa`/`speechmos` import · editable 설치 · asteroid 백엔드 | DNSMOS 전부 `nan` · 래퍼가 첫 행에서 멈춤 |
+| 3. 패키지 | `requirements_h200.txt` 23개 핀 전부 · **패키지 그림자(env 밖 로드)** · **onnxruntime 배포본 1개** · numpy<2 · setuptools<81 · `pip check` · `librosa`/`speechmos` import · editable 설치 · asteroid 백엔드 | DNSMOS 전부 `nan` · 래퍼가 첫 행에서 멈춤 |
 | 4. 지표 | SI-SDR native≡asteroid(<1e-6) · STOI/ESTOI/PESQ 유한값 · **DNSMOS 가 실제로 `CUDAExecutionProvider` 로 도는지** | DNSMOS 가 조용히 CPU 로 폴백 |
 | 5. 모델 캐시 · CLI | `HF_HOME` 영속 경로 · `embedding_model.ckpt` · `model.safetensors` · `.incomplete` 없음 · `python -m tse_eval --help` | 채점 2시간 지점에서 3 GB 재다운로드 |
 | 6. `--full` | ECAPA self-cosine ≈ 1 · Whisper bf16 전사 | 모델 로드 실패 |
@@ -395,6 +446,7 @@ TSE_Eval 설치 검증 — H100 / H200 (Hopper)  (repo: /home/work/my-code/TSE_E
 ── 3. 패키지 ──────────────────────────────────────────────────────
   (대조 기준: requirements/h200/requirements_h200.txt · 23개 패키지)
   [PASS] pkg onnxruntime-gpu                1.20.2 ⊨ >=1.19.2,<1.21
+  [PASS] 패키지 그림자 (env 밖 로드)                 감시 10개 모두 env 안 (tseeval)
   [PASS] onnxruntime 배포본 1개                 onnxruntime-gpu 1.20.2 한 줄만 설치됨
   [PASS] pip check                          No broken requirements found.
   ...
@@ -408,7 +460,7 @@ TSE_Eval 설치 검증 — H100 / H200 (Hopper)  (repo: /home/work/my-code/TSE_E
   [PASS] WER (Whisper large-v3)             Whisper on cuda (torch.bfloat16) · wer 1.00 · hyp 'Bye.'
 
 ════════════════════════════════════════════════════════════════
-  결과: PASS 48 · WARN 0 · FAIL 0 · SKIP 0
+  결과: PASS 49 · WARN 0 · FAIL 0 · SKIP 0
   ✅ 설치가 올바릅니다.
 ════════════════════════════════════════════════════════════════
 ```
@@ -488,6 +540,8 @@ export HF_HOME=/home/work/my-checkpoints/hf_cache
 ```
 
 이 2줄이면 끝입니다. 환경변수를 더 설정할 필요는 없습니다.
+다만 **⑤-b 의 `activate.d` 훅은 `$CONDA_PREFIX` 안이라 env 와 함께 남지만, env 를 새로 만들거나
+서버가 바뀌면 다시 만들어야 합니다.** 검증 1 의 `패키지 그림자` 항목이 PASS 면 살아 있는 것입니다.
 세션 시작 때 한 번 확인하고 싶으면 `python requirements/h200/verify_h200_env.py` (약 25초).
 
 > 💡 대량 평가가 느리게 느껴지면 [§6 DNSMOS 속도](#dnsmos-속도-실측) 를 보세요.
@@ -503,6 +557,7 @@ export HF_HOME=/home/work/my-checkpoints/hf_cache
 | `ERROR: ... tse-eval 0.1.0 requires onnxruntime` (③단계) | repo 의 **`tse_eval.egg-info` 잔여물** 을 pip 이 오인 | `rm -rf tse_eval.egg-info build` 후 재시도. 무해하니 무시해도 됩니다 |
 | DNSMOS 가 CPU 로 돎 + `libcudnn_ops.so.9: undefined symbol` 경고 | 같은 프로세스에서 torch 가 cuDNN 을 **먼저** 올림 → onnxruntime CUDA EP 로드 실패 후 CPU 폴백 | `tse_eval` 은 `prime_dnsmos_session()` 으로 순서를 고정하므로 해당 없음. 직접 onnxruntime 을 쓰는 코드라면 ONNX 세션을 torch CUDA 연산보다 먼저 만드세요 |
 | `pip list` 에 onnxruntime 이 두 줄 | CPU `onnxruntime` 과 `onnxruntime-gpu` 공존 (`.[cpu]` extra 를 깔았음) | `pip uninstall -y onnxruntime onnxruntime-gpu` → ③ 재실행 → `pip install -e '.[test]'` |
+| `wer` · `spk_sim` 열이 전부 `nan` + `No module named 'httpx'` | 컨테이너의 `PYTHONPATH` 가 `~/.local` 의 transformers 5.17.0 을 앞세워 고정본을 가림 | ⑤-b 의 `activate.d` 훅을 만드세요. 임시로는 `export PYTHONNOUSERSITE=1 && unset PYTHONPATH` |
 | `dnsmos_*` 4열이 전부 `nan` | **`librosa` 누락.** `speechmos` 가 의존성을 선언하지 않는데 내부에서 `librosa` 를 import 하고, 지표 함수가 예외를 `nan` 으로 삼킴 | `pip install librosa==0.11.0` |
 | `arch_list` 에 `sm_90` 없음 | cu121 아닌 torch 가 깔림 | `pip install --force-reinstall torch==2.5.1+cu121 torchaudio==2.5.1+cu121 --index-url https://download.pytorch.org/whl/cu121` |
 | DNSMOS 가 느림 | 가속이 안 걸렸을 수 있음 | sidecar 의 `dnsmos.actual_providers` 확인. `CUDAExecutionProvider` 가 없으면 아래 [DNSMOS 속도](#dnsmos-속도-실측) 참고 |

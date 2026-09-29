@@ -398,6 +398,29 @@ overlap 0.0, target 구간 안에서의 SI-SDR
   로그가 나오면 멈춘 게 아닙니다.
 - 빨간 `pthread_setaffinity_np failed` 줄은 스레드 제한이 안 걸린 상태의 증상입니다(무해).
 
+### 4-2b. 🔴 컨테이너가 주입하는 `PYTHONPATH` 가 고정 버전을 가립니다
+
+Backend.AI(NIPA) 컨테이너는 세션마다 `PYTHONPATH=/home/work/.local/lib/python3.10/site-packages`
+를 주입합니다(사용자 설정 어디에도 없습니다). 2026-09-23 그 경로에 `transformers 5.17.0` /
+`huggingface_hub 1.32.0` 이 설치되면서 env 고정본(4.46.3 / 0.34.4)을 가렸고, 그 5.17.0 은
+`httpx` 를 요구하는데 없어 **`import transformers` 자체가 실패**합니다.
+
+TSE_Eval 에서의 증상은 **조용한 실패**입니다 — 지표 함수가 예외를 `nan` 으로 삼키므로
+**`wer` 과 `spk_sim` 열이 에러 없이 전부 `nan`** 이 됩니다(SI-SDR·PESQ·DNSMOS 는 정상).
+기존 채점(2026-08-07 ~ 09-01)은 그 설치보다 앞서므로 **고정본으로 났습니다.**
+
+- **대응(적용됨)**: `conda activate tseeval` 시 `PYTHONNOUSERSITE=1` + `unset PYTHONPATH` 를
+  거는 `activate.d` 훅 — 만드는 법은
+  [H200 INSTALL 가이드](requirements/h200/INSTALL.md) §3 ⑤-b.
+  형제 repo 3개(tpex·styletse·llmtse)도 같은 방식입니다.
+- 🔴 **둘 중 하나만으로는 안 됩니다**(4조합 실측): `unset PYTHONPATH` 만 → 5.17.0,
+  `PYTHONNOUSERSITE=1` 만 → 5.17.0, 둘 다 → 4.46.3 ✅.
+  conda env 의 user-site 경로가 바로 그 디렉토리라 `site.py` 가 그것을 먼저 추가하기 때문입니다.
+- **확인법**: `python requirements/h200/verify_h200_env.py` 의 **패키지 그림자** 항목.
+  훅은 `$CONDA_PREFIX` 안이라 **git 으로 따라오지 않습니다** — 새 env·새 서버에서는 다시 만드세요.
+- `~/.local` 의 5.17.0 은 **지우지 마세요.** 다른 사람이 설치한 것이고, 훅은 이 env 를 쓰는
+  셸에서만 가립니다.
+
 ### 4-3. 설치 중 다른 터미널에서 같은 env 에 conda 를 쓰지 마세요
 
 `conda env remove` 와 설치가 겹치면 **env 디렉토리가 도중에 사라집니다.** 증상이 원인과
